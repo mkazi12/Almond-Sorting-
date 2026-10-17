@@ -10,3 +10,13 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+class MainWindow(QMainWindow):
+    def init(self):
+        super().init()
+        self.setWindowTitle("DINOS Almond Detection")
+        self.resize(800, 600)
+
+        self.image_label = QLabel("Choose an image to begin")
+        open_button = QPushButton("Open almond image")
+        open_button.clicked.connect(self.open_image)
