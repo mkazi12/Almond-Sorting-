@@ -1,6 +1,7 @@
 import sys
+import cv2
 
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -12,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.image_loader import ImageLoadError, load_image
-
+from app.inference import run_inference_and_overlay
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -44,15 +45,27 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
+        # mock inference testing
         try:
-            image = load_image(path)
+            # validate  image with image loader
+            _ = load_image(path)
+            
+            # run inference and draw bounding boxes using OpenCV
+            result_cv_image = run_inference_and_overlay(path)
+            
+            # convert OpenCV BGR array to PySide6 QImage (RGB)
+            rgb_image = cv2.cvtColor(result_cv_image, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_image.shape
+            bytes_per_line = ch * w
+            q_img = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            
+            # display the rendered image in the UI
+            self.image_label.setPixmap(QPixmap.fromImage(q_img).scaledToWidth(600))
+            
         except ImageLoadError as error:
             self.image_label.setText(str(error))
-            return
-
-        # Keep the decoded image at full resolution; scale only the display copy.
-        self.image_label.setPixmap(QPixmap.fromImage(image).scaledToWidth(600))
-
+        except Exception as e:
+            self.image_label.setText(f"Inference Error: {e}")
 
 app = QApplication(sys.argv)
 window = MainWindow()
