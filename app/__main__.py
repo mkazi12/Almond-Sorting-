@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.image_loader import ImageLoadError, load_image
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -19,6 +21,7 @@ class MainWindow(QMainWindow):
         self.resize(800, 600)
 
         self.image_label = QLabel("Choose an image to begin")
+        self.image_label.setWordWrap(True)
         open_button = QPushButton("Open almond image")
         open_button.clicked.connect(self.open_image)
 
@@ -41,12 +44,14 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
-        image = QPixmap(path)
-        if image.isNull():
-            self.image_label.setText("Could not open that image.")
+        try:
+            image = load_image(path)
+        except ImageLoadError as error:
+            self.image_label.setText(str(error))
             return
 
-        self.image_label.setPixmap(image.scaledToWidth(600))
+        # Keep the decoded image at full resolution; scale only the display copy.
+        self.image_label.setPixmap(QPixmap.fromImage(image).scaledToWidth(600))
 
 
 app = QApplication(sys.argv)
