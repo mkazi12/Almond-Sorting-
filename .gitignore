@@ -1,4 +1,7 @@
 # Local virtual environment
+/venv/
+/.venv/
+/env/
 /dinos/
 
 # Python-generated files
