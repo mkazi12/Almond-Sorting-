@@ -42,12 +42,27 @@ Model files are not committed unless the team decides they should be. If they ar
 downloaded instead, document the download step here and verify the checksum after
 downloading.
 
+## Camera, sample media, and workstation
+
+These are also shown in the app under **Recorded setup**. Change
+`app/recorded_setup.py` and this table together.
+
+| Field | Recorded value | Status |
+|---|---|---|
+| Camera protocol / interface | USB UVC | Recorded development camera (not the industrial camera yet) |
+| Resolution | 1280x720 | Recorded |
+| Frame rate | 30 FPS | Recorded |
+| Sample media | `media/Almond sample.jpg` (still frame) | Recorded |
+| Target OS | Windows 11 | Recorded from the current team workstation |
+| Target GPU | AMD Radeon(TM) Graphics | Recorded from the current team workstation |
+
 ## Platform assumptions
 
-- Developed and run as a desktop app (PySide6). Inference hardware (CPU only or GPU): TBD.
+- Developed and run as a desktop app (PySide6) on the Windows 11 workstation above.
+  The same PC has an AMD Radeon(TM) Graphics GPU; CPU fallback is still allowed.
 - Verified so far: the pinned packages install on Python 3.12.3 and the app's imports
-  work (Linux, headless/offscreen). Not yet verified on the team's own machines
-  (Windows/macOS), so confirm there before the sprint demo.
+  work (Linux, headless/offscreen). Confirm the Windows 11 demo machine before the
+  sprint demo.
 
 ## Setting up from a fresh checkout
 
