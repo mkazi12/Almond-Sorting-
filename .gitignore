@@ -2,8 +2,10 @@
 /venv/
 /.venv/
 /env/
-/dinos/
 
 # Python-generated files
 __pycache__/
 *.py[cod]
+
+# Folders
+/data/
