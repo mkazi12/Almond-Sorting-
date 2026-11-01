@@ -1,0 +1,58 @@
+{
+  "description": "Authored development fixture. These accepted and rejected records were not produced by dataset import or validation.",
+  "source_policy": {
+    "require_lot": true,
+    "require_session": true
+  },
+  "accepted": [
+    {
+      "image_id": "fix-001",
+      "coco_image_id": 1,
+      "image_path": "images/two_a.png",
+      "annotation_path": "annotations/instances.json",
+      "width": 80,
+      "height": 60,
+      "source_lot": "lot-1",
+      "source_session": "session-1",
+      "near_duplicate_group_id": "dup-1"
+    },
+    {
+      "image_id": "fix-002",
+      "coco_image_id": 2,
+      "image_path": "images/a_and_b.png",
+      "annotation_path": "annotations/instances.json",
+      "width": 80,
+      "height": 60,
+      "source_lot": "lot-1",
+      "source_session": "session-1",
+      "near_duplicate_group_id": "dup-1"
+    },
+    {
+      "image_id": "fix-003",
+      "coco_image_id": 3,
+      "image_path": "images/negative.png",
+      "annotation_path": "annotations/instances.json",
+      "width": 80,
+      "height": 60,
+      "source_lot": null,
+      "source_session": "session-2",
+      "near_duplicate_group_id": null
+    }
+  ],
+  "rejected": [
+    {
+      "image_id": null,
+      "image_path": "images/not-a-real-capture.jpg",
+      "reasons": [
+        {
+          "category": "unreadable_image",
+          "detail": "Authored development rejection. This record was not produced by dataset validation."
+        },
+        {
+          "category": "missing_annotation",
+          "detail": "Authored second reason on the same rejected image."
+        }
+      ]
+    }
+  ]
+}
