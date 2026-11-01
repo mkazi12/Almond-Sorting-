@@ -1,0 +1,20 @@
+{
+  "info": {
+    "description": "Authored COCO fixture. One file covers every accepted image, including the negative image. This is not output from a dataset importer."
+  },
+  "images": [
+    {"id": 1, "file_name": "images/two_a.png", "width": 80, "height": 60},
+    {"id": 2, "file_name": "images/a_and_b.png", "width": 80, "height": 60},
+    {"id": 3, "file_name": "images/negative.png", "width": 80, "height": 60}
+  ],
+  "annotations": [
+    {"id": 11, "image_id": 1, "category_id": 1, "bbox": [10, 10, 20, 15]},
+    {"id": 12, "image_id": 1, "category_id": 1, "bbox": [40, 30, 20, 15]},
+    {"id": 21, "image_id": 2, "category_id": 1, "bbox": [5, 5, 18, 12]},
+    {"id": 22, "image_id": 2, "category_id": 2, "bbox": [40, 28, 22, 16]}
+  ],
+  "categories": [
+    {"id": 1, "name": "A"},
+    {"id": 2, "name": "B"}
+  ]
+}
