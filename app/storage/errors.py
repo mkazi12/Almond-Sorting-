@@ -43,3 +43,7 @@ class ValidationError(StorageError):
 
 class NotFoundError(StorageError):
     """The requested stored record does not exist."""
+
+
+class BackupError(StorageError):
+    """A backup or restore could not be completed."""

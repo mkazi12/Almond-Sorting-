@@ -18,3 +18,6 @@ See [docs/database.md](docs/database.md) for the schema and design decisions,
 Windows installation, configuration, and the migration workflow.
 
 See [Storage services](docs/storage-services.md) for SCRUM-48 APIs and acceptance tests.
+
+See [Storage recovery](docs/storage-operations.md) for SCRUM-49 sample data,
+media verification, backup/restore commands, and acceptance results.
