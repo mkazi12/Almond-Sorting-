@@ -16,3 +16,5 @@ python -m app.storage migrate
 
 See [docs/database.md](docs/database.md) for the schema and design decisions,
 Windows installation, configuration, and the migration workflow.
+
+See [Storage services](docs/storage-services.md) for SCRUM-48 APIs and acceptance tests.

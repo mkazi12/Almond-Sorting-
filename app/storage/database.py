@@ -27,6 +27,7 @@ def create_db_engine(settings: DatabaseSettings, database: str | None = None, **
     connect_args = {
         "connect_timeout": CONNECT_TIMEOUT_SECONDS,
         "application_name": "dinos",
+        "options": "-c timezone=UTC",
         **kwargs.pop("connect_args", {}),
     }
     return create_engine(

@@ -9,5 +9,6 @@ __pycache__/
 
 # Folders
 /data/
+/.local-test/
 # Local settings and credentials (see .env.example)
 .env

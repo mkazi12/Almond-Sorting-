@@ -8,6 +8,9 @@ backup, by changing one setting.
 
 All storage code lives in `app/storage/`:
 
+For create/read service contracts and SCRUM-48 acceptance tests, see
+[Storage services](storage-services.md).
+
 | File | Purpose |
 |---|---|
 | `config.py` | Loads `DINOS_*` settings from the environment or `.env` |
