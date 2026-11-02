@@ -20,10 +20,20 @@ Status key: **Pinned** = decided and in `requirements.txt`. **TBD** = not chosen
 | shiboken6 | 6.12.0 | Pinned | Required by PySide6. Must match the PySide6 version. |
 | Image decoder / array library | TBD | TBD (SCRUM-32) | Needed to turn a JPG/PNG into an array for the model. Candidates: Pillow, OpenCV, numpy. |
 | Inference runtime | TBD | TBD (SCRUM-34) | Candidates: onnxruntime, torch. Depends on the model format below. |
+| SQLAlchemy | 2.1.6 | Pinned | Database models and queries (`app/storage`). MIT. |
+| alembic | 1.20.1 | Pinned | Versioned schema migrations. MIT. Pulls in Mako 1.4.3 and MarkupSafe 3.0.4. |
+| psycopg, psycopg-binary | 3.3.6 | Pinned | PostgreSQL driver; the binary wheel bundles libpq for Windows and macOS. LGPL-3.0, used unmodified (same obligations as PySide6). |
+| python-dotenv | 1.2.4 | Pinned | Reads database credentials and the media root from the untracked `.env` file. BSD-3-Clause. |
 
 Not used, so not installed: PySide6_Addons, PySide6_Pdf, PySide6_WebEngine. The full
 `PySide6` meta-package installs these; use `PySide6_Essentials` instead. If a later
 feature needs one of them, add it here with a reason.
+
+## Database
+
+| Item | Version | Status | Notes |
+|---|---|---|---|
+| PostgreSQL | 18.x (dev image `postgres:18.6`) | Pinned | PostgreSQL License. 18 is the minimum: the schema uses `uuidv7()` and the built-in `C.UTF-8` collation. Supported upstream until November 2030. Developers run it with `docker compose up -d`; the Windows PC uses the official PostgreSQL 18 installer. See `docs/database.md`. |
 
 ## Model
 
@@ -71,6 +81,9 @@ python3.12 -m venv .venv
 # Windows PowerShell:  .venv\Scripts\Activate.ps1
 # macOS/Linux:         source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env            # then set a real DINOS_DB_PASSWORD
+docker compose up -d            # local PostgreSQL 18 (Windows PC: native installer)
+python -m app.storage migrate   # create or update the schema
 <run command, documented in SCRUM-29>
 ```
 

@@ -22,7 +22,10 @@ class ManifestSaveTests(unittest.TestCase):
         self.addCleanup(dataset_directory.cleanup)
         self.addCleanup(output_directory.cleanup)
         self.dataset = load_dataset_fixture(Path(dataset_directory.name))
-        self.output = Path(output_directory.name)
+        # save_manifest returns resolved paths. Resolve here too, because temp
+        # folders are reached through links on macOS (/var -> /private/var)
+        # and can use 8.3 short names on Windows (C:\Users\RUNNER~1\...).
+        self.output = Path(output_directory.name).resolve()
 
     def test_v1_and_v2_are_separate_readable_manifests(self):
         first = save_manifest(build_manifest(self.dataset, "v1"), self.output)
