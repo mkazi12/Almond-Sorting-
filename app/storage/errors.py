@@ -35,3 +35,11 @@ class MediaPathError(MediaStorageError):
 
 class MediaMissingError(MediaStorageError):
     """A database row points at a media file that is no longer on disk."""
+
+
+class ValidationError(StorageError):
+    """An operation's inputs or state are invalid."""
+
+
+class NotFoundError(StorageError):
+    """The requested stored record does not exist."""

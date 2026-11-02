@@ -24,6 +24,17 @@ from app.storage.media import MediaStore
 from app.storage.schema import upgrade_to_head
 
 
+def pytest_addoption(parser):
+    parser.addoption("--run-slow", action="store_true", help="Run full-shift storage benchmark")
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--run-slow"):
+        for item in items:
+            if "slow" in item.keywords:
+                item.add_marker(pytest.mark.skip(reason="Use --run-slow for the full-shift benchmark"))
+
+
 def _database_unavailable(reason: str) -> None:
     if os.environ.get("DINOS_REQUIRE_DB") == "1":
         pytest.fail(reason)
