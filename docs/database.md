@@ -9,7 +9,8 @@ backup, by changing one setting.
 All storage code lives in `app/storage/`:
 
 For create/read service contracts and SCRUM-48 acceptance tests, see
-[Storage services](storage-services.md).
+[Storage services](storage-services.md). For sample records, media verification,
+and backup/restore commands, see [Storage recovery](storage-operations.md).
 
 | File | Purpose |
 |---|---|

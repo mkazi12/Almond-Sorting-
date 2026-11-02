@@ -71,6 +71,7 @@ class DatabaseSettings:
 class Settings:
     database: DatabaseSettings
     media_root: Path
+    pg_bin: Path | None = None
 
 
 def load_settings(
@@ -88,7 +89,7 @@ def load_settings(
 
     values: dict[str, str] = {}
     origins: dict[str, Path] = {}
-    for name in (*REQUIRED_VARIABLES, "DINOS_DB_PORT"):
+    for name in (*REQUIRED_VARIABLES, "DINOS_DB_PORT", "DINOS_PG_BIN"):
         if environ.get(name, "").strip():
             values[name] = environ[name].strip()
             origins[name] = Path.cwd()
@@ -114,7 +115,11 @@ def load_settings(
     media_root = Path(values["DINOS_MEDIA_ROOT"]).expanduser()
     if not media_root.is_absolute():
         media_root = origins["DINOS_MEDIA_ROOT"] / media_root
-    return Settings(database=database, media_root=media_root.resolve())
+    pg_bin = Path(values["DINOS_PG_BIN"]).expanduser() if "DINOS_PG_BIN" in values else None
+    if pg_bin is not None and not pg_bin.is_absolute():
+        pg_bin = origins["DINOS_PG_BIN"] / pg_bin
+    return Settings(database=database, media_root=media_root.resolve(),
+                    pg_bin=pg_bin.resolve() if pg_bin is not None else None)
 
 
 def _env_file_path(environ: Mapping[str, str], env_file: str | Path | None) -> Path:
