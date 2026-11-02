@@ -20,10 +20,17 @@ Status key: **Pinned** = decided and in `requirements.txt`. **TBD** = not chosen
 | shiboken6 | 6.12.0 | Pinned | Required by PySide6. Must match the PySide6 version. |
 | Image decoder / array library | TBD | TBD (SCRUM-32) | Needed to turn a JPG/PNG into an array for the model. Candidates: Pillow, OpenCV, numpy. |
 | Inference runtime | TBD | TBD (SCRUM-34) | Candidates: onnxruntime, torch. Depends on the model format below. |
+| SQLAlchemy | 2.1.6 | Pinned | Database models and queries (`app/storage`). MIT. |
 
 Not used, so not installed: PySide6_Addons, PySide6_Pdf, PySide6_WebEngine. The full
 `PySide6` meta-package installs these; use `PySide6_Essentials` instead. If a later
 feature needs one of them, add it here with a reason.
+
+## Database
+
+| Item | Version | Status | Notes |
+|---|---|---|---|
+| PostgreSQL | 18.x (dev image `postgres:18.6`) | Pinned | PostgreSQL License. 18 is the minimum: the schema uses `uuidv7()` and the built-in `C.UTF-8` collation. Supported upstream until November 2030. Developers run it with `docker compose up -d`; the Windows PC uses the official PostgreSQL 18 installer. See `docs/database.md`. |
 
 ## Model
 
