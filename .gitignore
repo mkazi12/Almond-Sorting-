@@ -1,14 +1,32 @@
-# Local virtual environment
+# Local Python environments, including the team's existing environment name.
 /venv/
 /.venv/
 /env/
 
-# Python-generated files
+# Python and test output.
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
 
-# Folders
+# Raw data, derived datasets, weights and generated runs stay local.
 /data/
+/runs/
+/artifacts/
+/outputs/
 /.local-test/
-# Local settings and credentials (see .env.example)
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Local settings and credentials from older checkouts stay private.
 .env
+.env.*
+
+# Packaging output.
+/build/
+/dist/
+*.egg-info/

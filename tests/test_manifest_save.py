@@ -1,5 +1,4 @@
 import json
-import os
 import tempfile
 import unittest
 from dataclasses import replace
@@ -77,9 +76,7 @@ class ManifestSaveTests(unittest.TestCase):
 
     def test_unsafe_version_labels_stay_inside_the_output_directory(self):
         manifest = build_manifest(self.dataset, "v1")
-        labels = ["../escape", "..\\escape", "nested/escape", "nested\\escape", "..", ".", "/escape.json"]
-        if os.name == "nt":
-            labels.extend(["C:/escape", "C:escape"])
+        labels = ["../escape", "..\\escape", "nested/escape", "nested\\escape", "..", ".", "/escape.json", "C:/escape", "C:escape"]
         escape = self.output.parent / "escape.json"
         existed = escape.exists()
 

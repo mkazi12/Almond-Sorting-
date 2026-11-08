@@ -62,7 +62,7 @@ def _version_filename(dataset_version: str) -> str:
     if (
         not label
         or label in {".", ".."}
-        or any(character in label for character in "/\\\x00")
+        or any(character in label for character in "/\\:\x00")
         or path.is_absolute()
         or path.drive
         or path.root

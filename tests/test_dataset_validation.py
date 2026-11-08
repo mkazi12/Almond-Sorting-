@@ -102,6 +102,25 @@ class DatasetValidationTests(unittest.TestCase):
         changed_entry = dict(self.entry, width=81)
         self.assertEqual(self.check(coco_entry=changed_entry).reasons[0].category, "dimension_mismatch")
 
+    def test_actual_format_is_checked_even_when_the_extension_is_supported(self):
+        disguised = self.root / "disguised.png"
+        Image.new("RGB", (80, 60)).save(disguised, format="BMP")
+        result = self.check(image_path=disguised, image_name=disguised.name)
+        self.assertFalse(result.accepted)
+        self.assertIn("unreadable_image", [reason.category for reason in result.reasons])
+
+    def test_exif_orientation_does_not_rotate_annotation_coordinates(self):
+        jpeg = self.root / "oriented.jpg"
+        exif = Image.Exif()
+        exif[274] = 6  # A viewer may rotate 90 degrees, but stored pixels are 80x60.
+        Image.new("RGB", (80, 60)).save(jpeg, exif=exif)
+        before = jpeg.read_bytes()
+        result = self.check(image_path=jpeg, image_name=jpeg.name)
+        self.assertTrue(result.accepted)
+        self.assertEqual((result.image.width, result.image.height), (80, 60))
+        self.assertEqual(result.objects[0].bbox_xywh, (10.0, 10.0, 20.0, 15.0))
+        self.assertEqual(jpeg.read_bytes(), before)
+
     def test_index_joins_by_coco_image_ids(self):
         doc = {
             "images": [self.entry],

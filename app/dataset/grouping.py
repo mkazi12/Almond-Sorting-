@@ -1,4 +1,4 @@
-"""Group related frames so one recording never straddles two splits (SCRUM-50).
+"""Group related frames so one recording never straddles two splits.
 
 A *group* is the smallest set of accepted images that must stay together:
 

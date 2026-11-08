@@ -28,17 +28,7 @@ def _read_error(reader: QImageReader) -> ImageLoadError:
 
 
 def load_image(path: str | Path) -> QImage:
-    """Return a full-resolution image, or raise ImageLoadError.
-
-    The suffix must be .jpg, .jpeg, or .png (case-insensitive), and the
-    actual contents must be JPEG or PNG. The two need not match exactly:
-    for example, genuine PNG contents in a .jpg file are accepted.
-
-    This function does not open dialogs, scale images, or run inference.
-    Callers handle cancellation before calling and display ImageLoadError
-    messages for expected failures. A detected format alone is not success;
-    Qt must also decode the image's pixel data.
-    """
+    """Return a full-resolution image, or raise ImageLoadError."""
     path = Path(path)
     if path.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
         raise ImageLoadError(

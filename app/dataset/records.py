@@ -1,4 +1,4 @@
-"""For Vincent: Dataset records shared by later manifest, summary, and preview code.
+"""Dataset records shared by import, manifest, summary, and preview code.
 
 Paths stored on these records are relative to ``DatasetInput.root``.
 Absolute locations come only from ``resolve_dataset_path``. Copying an
@@ -17,38 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.dataset.paths import (
+    DatasetPathError,
+    relative_dataset_path,
+    relative_path_identity,
+    resolve_dataset_path,
+)
 
 UNKNOWN_SOURCE = "unknown"
-
-
-class DatasetPathError(ValueError):
-    """A dataset path is absolute or escapes the dataset root."""
-
-
-def relative_dataset_path(path: str | Path) -> Path:
-    """Return ``path`` as a relative path that stays inside the dataset root."""
-    relative = Path(path)
-    if (
-        relative.is_absolute()
-        or relative.drive
-        or relative.root
-        or not relative.parts
-        or ".." in relative.parts
-    ):
-        raise DatasetPathError(
-            "Dataset paths must be relative to the dataset root and stay inside it."
-        )
-    return Path(*relative.parts)
-
-
-def resolve_dataset_path(root: Path, relative_path: str | Path) -> Path:
-    """Resolve one dataset-relative path against ``root``."""
-    return (Path(root).resolve() / relative_dataset_path(relative_path)).resolve()
-
-
-def relative_path_identity(path: str | Path) -> str:
-    """Identity of an annotation or image file, independent of the root."""
-    return relative_dataset_path(path).as_posix()
 
 
 def _normalize_source_value(value: str | None) -> str | None:
