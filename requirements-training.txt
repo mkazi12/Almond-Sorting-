@@ -1,0 +1,7 @@
+# Install in a separate Python 3.11/3.12 environment.
+rfdetr==1.3.0
+torch==2.8.0
+torchvision==0.23.0
+numpy==1.26.4
+transformers==4.51.3
+peft==0.15.2
