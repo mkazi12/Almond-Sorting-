@@ -1,4 +1,4 @@
-"""SCRUM-42: read a COCO image collection and construct Zakari's DatasetInput.
+"""Read a COCO image collection and construct validated dataset records.
 
 The importer is stateless and read-only. Each call returns a fresh inventory
 with deterministic, dataset-scoped image IDs. It never persists records or

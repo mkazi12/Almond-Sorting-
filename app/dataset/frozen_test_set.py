@@ -1,4 +1,4 @@
-"""Version and lock the independent test set (SCRUM-53).
+"""Version and lock the independent test set.
 
 Run from the project root, after ``app.split_dataset`` (and ideally
 ``app.audit_dataset``) has produced a dataset folder::
@@ -37,12 +37,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from app.dataset.paths import (
+    DatasetPathError,
+    normalize_relative_path,
+    resolve_dataset_path,
+)
+
 SCHEMA_VERSION = 1
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 SPLITS = ("train", "valid", "test")
 DEFAULT_FROZEN_IN = "Sprint 2"
 DEFAULT_LOCKED_THROUGH = "Sprint 7"
 _VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 class FrozenSetError(ValueError):
@@ -80,26 +87,51 @@ def _lock_hash(files: list[dict], groups: list[str]) -> str:
 
 
 def _read_split_manifest(dataset: Path) -> dict:
-    path = dataset / "split_manifest.json"
+    try:
+        path = resolve_dataset_path(dataset, "split_manifest.json")
+    except DatasetPathError as error:
+        raise FrozenSetError(f"Invalid split manifest location: {error}") from error
     if not path.is_file():
         raise FrozenSetError(f"No split_manifest.json in {dataset}.")
     try:
         manifest = json.loads(path.read_text(encoding="utf-8-sig"))
         rows = manifest["images"]
-    except (ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, KeyError, TypeError) as error:
         raise FrozenSetError(f"split_manifest.json is not usable: {error}") from error
-    if not rows:
+    if not isinstance(rows, list) or not rows:
         raise FrozenSetError("The split manifest contains no images.")
+    seen_outputs, seen_ids = set(), set()
     for row in rows:
-        if row.get("split") not in SPLITS or not row.get("group_id") or not row.get("output"):
+        if (
+            not isinstance(row, dict)
+            or row.get("split") not in SPLITS
+            or not _nonblank(row.get("group_id"))
+            or not _nonblank(row.get("output"))
+        ):
             raise FrozenSetError("Each image needs a valid split, group_id and output path.")
+        path = _inside(dataset, row["split"], row["output"])
+        if path in seen_outputs:
+            raise FrozenSetError(f"Repeated output record in split manifest: {row['output']}")
+        seen_outputs.add(path)
+        if "image_id" in row:
+            if not _nonblank(row["image_id"]) or row["image_id"] in seen_ids:
+                raise FrozenSetError("Split image_id values must be nonempty and unique.")
+            seen_ids.add(row["image_id"])
+        if row.get("source") is not None and not isinstance(row["source"], str):
+            raise FrozenSetError(f"Image source must be a string or null: {row['output']}")
     return manifest
 
 
 def _inside(root: Path, split: str, relative: str) -> Path:
-    path = (root / relative).resolve()
-    if not path.is_relative_to(root / split):
-        raise FrozenSetError(f"Image path is outside its recorded partition: {relative}")
+    try:
+        normalized = normalize_relative_path(relative)
+        if split not in SPLITS or not normalized.startswith(split + "/"):
+            raise DatasetPathError("Path does not start with its recorded partition.")
+        path = resolve_dataset_path(root, normalized)
+        if not path.is_relative_to(Path(root).resolve() / split):
+            raise DatasetPathError("Path resolves outside its recorded partition.")
+    except DatasetPathError as error:
+        raise FrozenSetError(f"Image path is outside its recorded partition: {relative}") from error
     return path
 
 
@@ -108,7 +140,7 @@ def _images_on_disk(root: Path, split: str) -> set[Path]:
     if not folder.is_dir():
         return set()
     return {
-        p.resolve()
+        _inside(root, split, p.relative_to(root).as_posix())
         for p in folder.rglob("*")
         if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
     }
@@ -150,8 +182,8 @@ def freeze_test_set(
     valid, test images on disk that the manifest does not list, or an audit
     report whose status is BLOCKED.
     """
-    version = version.strip()
-    if not _VERSION_PATTERN.match(version):
+    version = version.strip() if isinstance(version, str) else ""
+    if not _VERSION_PATTERN.fullmatch(version):
         raise FrozenSetError(
             "Version must be a single file-safe label such as 'test-v1' "
             "(letters, digits, '.', '_' or '-')."
@@ -181,31 +213,37 @@ def freeze_test_set(
         path = _inside(root, row["split"], row["output"])
         if path.is_file():
             other_hashes.setdefault(sha256_of(path), row["output"])
+        else:
+            problems.append(f"Manifest image is missing: {row['output']}")
 
     files: list[dict] = []
-    listed: set[Path] = set()
     for row in sorted(test_rows, key=lambda r: r["output"]):
         path = _inside(root, "test", row["output"])
         if not path.is_file():
             problems.append(f"Test image is missing: {row['output']}")
             continue
-        listed.add(path)
         digest = sha256_of(path)
         if digest in other_hashes:
             problems.append(
                 f"Test image {row['output']} is byte-identical to {other_hashes[digest]}."
             )
-        files.append(
-            {
-                "group_id": row["group_id"],
-                "output": row["output"],
-                "sha256": digest,
-                "source": row.get("source"),
-            }
-        )
+        entry = {
+            "group_id": row["group_id"],
+            "output": normalize_relative_path(row["output"]),
+            "sha256": digest,
+            "source": row.get("source"),
+        }
+        if "image_id" in row:
+            entry["image_id"] = row["image_id"]
+        files.append(entry)
 
-    for extra in sorted(_images_on_disk(root, "test") - listed):
-        problems.append(f"Image in test/ is absent from the manifest: {extra.relative_to(root).as_posix()}")
+    for split in SPLITS:
+        expected = {
+            _inside(root, split, row["output"])
+            for row in rows if row["split"] == split
+        }
+        for extra in sorted(_images_on_disk(root, split) - expected):
+            problems.append(f"Image in {split}/ is absent from the manifest: {extra.relative_to(root).as_posix()}")
 
     if problems:
         raise FrozenSetError("Cannot freeze the test set:\n  " + "\n  ".join(problems))
@@ -242,8 +280,9 @@ def _count_splits(rows: list[dict]) -> dict[str, int]:
 
 def save_test_lock(lock: dict, output_directory) -> Path:
     """Write ``lock`` to ``{output_directory}/{version}.json``, write-once and read-only."""
+    _validate_lock(lock)
     version = str(lock.get("version", ""))
-    if not _VERSION_PATTERN.match(version):
+    if not _VERSION_PATTERN.fullmatch(version):
         raise FrozenSetError("The lock has no file-safe version label.")
     folder = Path(output_directory).resolve()
     destination = folder / f"{version}.json"
@@ -267,15 +306,79 @@ def save_test_lock(lock: dict, output_directory) -> Path:
     return destination
 
 
+def _nonblank(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _validate_lock(lock: dict) -> None:
+    """Reject malformed or internally inconsistent locks before any file reads."""
+    if (
+        not isinstance(lock, dict)
+        or type(lock.get("schema_version")) is not int
+        or lock["schema_version"] != SCHEMA_VERSION
+    ):
+        raise FrozenSetError(f"Test lock requires schema_version {SCHEMA_VERSION}.")
+    if not isinstance(lock.get("version"), str) or not _VERSION_PATTERN.fullmatch(lock["version"]):
+        raise FrozenSetError("The lock has no file-safe version label.")
+    files, groups = lock.get("files"), lock.get("groups")
+    if not isinstance(files, list) or not files:
+        raise FrozenSetError("Test lock files must be a nonempty list.")
+    if (
+        not isinstance(groups, list)
+        or not groups
+        or any(not _nonblank(group) for group in groups)
+        or len(set(groups)) != len(groups)
+    ):
+        raise FrozenSetError("Test lock groups must be nonempty unique strings.")
+    outputs, ids = set(), set()
+    for entry in files:
+        if not isinstance(entry, dict) or not _nonblank(entry.get("group_id")):
+            raise FrozenSetError("Every test lock file needs a group_id.")
+        try:
+            output = normalize_relative_path(entry.get("output"))
+        except DatasetPathError as error:
+            raise FrozenSetError(f"Invalid test lock output: {error}") from error
+        if not output.startswith("test/") or output in outputs:
+            raise FrozenSetError("Test lock outputs must be unique paths inside test/.")
+        outputs.add(output)
+        digest = entry.get("sha256")
+        if not isinstance(digest, str) or not _SHA256_PATTERN.fullmatch(digest):
+            raise FrozenSetError(f"Invalid SHA-256 for test lock file: {output}")
+        if entry.get("source") is not None and not isinstance(entry["source"], str):
+            raise FrozenSetError(f"Invalid source for test lock file: {output}")
+        if "image_id" in entry:
+            if not _nonblank(entry["image_id"]) or entry["image_id"] in ids:
+                raise FrozenSetError("Test lock image_id values must be nonempty and unique.")
+            ids.add(entry["image_id"])
+    if set(groups) != {entry["group_id"] for entry in files}:
+        raise FrozenSetError("Test lock groups do not match its file membership.")
+    counts = lock.get("counts")
+    if (
+        not isinstance(counts, dict)
+        or type(counts.get("images")) is not int
+        or type(counts.get("groups")) is not int
+        or counts["images"] != len(files)
+        or counts["groups"] != len(groups)
+    ):
+        raise FrozenSetError("Test lock counts do not match its file and group membership.")
+    partitions = counts.get("all_partitions")
+    if (
+        not isinstance(partitions, dict)
+        or any(key not in SPLITS or type(value) is not int or value < 0 for key, value in partitions.items())
+        or partitions.get("test") != len(files)
+    ):
+        raise FrozenSetError("Test lock partition counts are invalid.")
+    if _lock_hash(files, groups) != lock.get("lock_hash"):
+        raise FrozenSetError("Test lock has been modified: its lock_hash no longer matches its contents.")
+
+
 def load_test_lock(path) -> dict:
-    """Read a lock and confirm it has not been edited since it was frozen."""
+    """Read and validate a lock without reading or decoding any test image."""
     try:
         lock = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-        files, groups, recorded = lock["files"], lock["groups"], lock["lock_hash"]
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, TypeError) as error:
         raise FrozenSetError(f"Test lock is not usable: {error}") from error
-    if _lock_hash(files, groups) != recorded:
-        raise FrozenSetError("Test lock has been modified: its lock_hash no longer matches its contents.")
+    _validate_lock(lock)
     return lock
 
 
@@ -297,28 +400,67 @@ def verify_test_lock(lock_path, dataset_dir) -> list[str]:
     for extra in sorted(_images_on_disk(root, "test") - listed):
         problems.append(f"Added after freeze: {extra.relative_to(root).as_posix()}")
 
-    manifest_path = root / "split_manifest.json"
-    if manifest_path.is_file():
-        rows = _read_split_manifest(root)["images"]
-        locked_groups = set(lock["groups"])
-        for group in sorted(locked_groups):
-            splits = _group_splits(rows).get(group, set())
-            if splits - {"test"}:
-                problems.append(f"Group {group} now also appears in {', '.join(sorted(splits - {'test'}))}.")
+    rows = _read_split_manifest(root)["images"]
+    test_rows = {
+        normalize_relative_path(row["output"]): row
+        for row in rows if row["split"] == "test"
+    }
+    locked_rows = {normalize_relative_path(entry["output"]): entry for entry in lock["files"]}
+    for output in sorted(locked_rows.keys() - test_rows.keys()):
+        problems.append(f"Removed from test manifest after freeze: {output}")
+    for output in sorted(test_rows.keys() - locked_rows.keys()):
+        problems.append(f"Added to test manifest after freeze: {output}")
+    for output in sorted(locked_rows.keys() & test_rows.keys()):
+        old, current = locked_rows[output], test_rows[output]
+        for field in ("group_id", "source", "image_id"):
+            if field in old and old.get(field) != current.get(field):
+                problems.append(f"Changed test {field}: {output}")
+
+    group_splits = _group_splits(rows)
+    for group in sorted(lock["groups"]):
+        splits = group_splits.get(group, set())
+        if splits - {"test"}:
+            problems.append(f"Group {group} now also appears in {', '.join(sorted(splits - {'test'}))}.")
+
+    # Compare only non-test file bytes with the saved hashes. Pixel decoding
+    # is never necessary to check whether training data contains test content.
+    frozen_hashes = locked_hashes(lock)
+    non_test_paths = set()
+    for row in rows:
+        if row["split"] == "test":
+            continue
+        path = _inside(root, row["split"], row["output"])
+        if not path.is_file():
+            problems.append(f"Manifest image is missing: {row['output']}")
+        else:
+            non_test_paths.add(path)
+    for split in ("train", "valid"):
+        non_test_paths.update(_images_on_disk(root, split))
+    for path in sorted(non_test_paths):
+        if sha256_of(path) in frozen_hashes:
+            problems.append(f"Frozen test content appears outside test/: {path.relative_to(root).as_posix()}")
     return problems
 
 
 def locked_hashes(lock: dict) -> frozenset[str]:
+    _validate_lock(lock)
     return frozenset(entry["sha256"] for entry in lock["files"])
 
 
 def leaked_paths(lock: dict, paths: Iterable) -> list[str]:
     """Paths (by file content) that match a frozen test image."""
     frozen = locked_hashes(lock)
-    return [str(p) for p in paths if Path(p).is_file() and sha256_of(Path(p)) in frozen]
+    leaks = []
+    for path in paths:
+        if not Path(path).is_file():
+            raise FrozenSetError(f"Cannot check a missing or non-file input: {path}")
+        if sha256_of(Path(path)) in frozen:
+            leaks.append(str(path))
+    return leaks
 
 
 def leaked_groups(lock: dict, group_ids: Iterable[str]) -> list[str]:
+    _validate_lock(lock)
     frozen = set(lock["groups"])
     return sorted({g for g in group_ids if g in frozen})
 

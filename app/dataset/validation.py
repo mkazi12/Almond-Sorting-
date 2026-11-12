@@ -1,5 +1,4 @@
-"""SCRUM-43: validate COCO detection labels and actual JPG/PNG image files.
-
+"""
 Validation is deliberately separate from folder discovery and manifest saving.
 Only valid pairs become CocoImage/GroundTruthObject records. Error categories
 are stable machine-readable values; details contain filenames and explanations.
@@ -9,11 +8,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import Mapping, Sequence
 
 from app.dataset.records import ClassSpec, CocoImage, GroundTruthObject, RejectionReason
-from app.image_loader import ImageLoadError, load_image
+from app.dataset.paths import DatasetPathError, normalize_relative_path, resolve_dataset_path
+from app.dataset.image_io import DatasetImageError, read_image_dimensions
 
 
 class DatasetValidationError(ValueError):
@@ -31,31 +31,18 @@ def safe_relative_path(value: str | Path, *, allow_root: bool = False) -> str:
     Does not follow symlinks. The importer also checks real filesystem containment
     before reading any path.
     """
-    if isinstance(value, Path):
-        value = str(value)
-    if not isinstance(value, str) or not value or "\x00" in value:
-        raise DatasetValidationError("unsafe_path", f"Invalid relative dataset path: {value!r}.")
-    if value.startswith(("/", "\\")) or PureWindowsPath(value).drive:
-        raise DatasetValidationError("unsafe_path", f"Absolute or network path is forbidden: {value!r}.")
-    parts = value.replace("\\", "/").split("/")
-    if any(part == ".." or ":" in part for part in parts):
-        raise DatasetValidationError("unsafe_path", f"Dataset path escapes its root: {value!r}.")
-    clean = [part for part in parts if part not in ("", ".")]
-    if not clean:
-        if allow_root:
-            return "."
-        raise DatasetValidationError("unsafe_path", f"Empty image or annotation path: {value!r}.")
-    return "/".join(clean)
+    try:
+        return normalize_relative_path(value, allow_root=allow_root)
+    except DatasetPathError as error:
+        raise DatasetValidationError("unsafe_path", str(error)) from error
 
 
 def require_inside_root(root: Path, relative: str) -> Path:
     """Safely resolve a source file, including rejecting outward-pointing symlinks."""
-    safe = safe_relative_path(relative)
-    base = Path(root).resolve()
-    candidate = (base / safe).resolve()
-    if not candidate.is_relative_to(base):
-        raise DatasetValidationError("unsafe_path", f"File {safe!r} resolves outside dataset root.")
-    return candidate
+    try:
+        return resolve_dataset_path(root, relative)
+    except DatasetPathError as error:
+        raise DatasetValidationError("unsafe_path", str(error)) from error
 
 
 def _int_id(value: object) -> bool:
@@ -195,9 +182,8 @@ def check_image_pair(
         reasons.append(RejectionReason("unsupported_image", f"{image_name}: only JPG and PNG images are supported."))
     else:
         try:
-            decoded = load_image(image_path)
-            image_width, image_height = decoded.width(), decoded.height()
-        except (ImageLoadError, OSError) as exc:
+            image_width, image_height = read_image_dimensions(image_path)
+        except (DatasetImageError, OSError) as exc:
             reasons.append(RejectionReason("unreadable_image", f"{image_name}: {exc}"))
 
     if coco_entry is None:

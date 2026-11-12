@@ -1,3 +1,4 @@
+import copy
 import json
 import shutil
 import stat
@@ -5,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from app.dataset import frozen_test_set as frozen
 from app.split_dataset import split_dataset
@@ -131,6 +133,15 @@ class FrozenTestSetTests(unittest.TestCase):
         with self.assertRaisesRegex(frozen.FrozenSetError, "absent from the manifest"):
             self.freeze()
 
+    def test_freeze_refuses_unlisted_non_test_images_including_test_copies(self):
+        test = next(row for row in self.manifest()["images"] if row["split"] == "test")
+        for split in ("train", "valid"):
+            extra = self.dataset / split / "unlisted-copy.jpg"
+            shutil.copyfile(self.dataset / test["output"], extra)
+            with self.subTest(split=split), self.assertRaisesRegex(frozen.FrozenSetError, f"Image in {split}/ is absent"):
+                self.freeze()
+            extra.unlink()
+
     def test_freeze_refuses_a_blocked_audit_and_records_a_passing_one(self):
         report = self.dataset / "audit_report.json"
         report.write_text(json.dumps({"status": "BLOCKED"}))
@@ -170,6 +181,96 @@ class FrozenTestSetTests(unittest.TestCase):
             frozen.assert_excluded(lock, paths=[renamed_copy])
         with self.assertRaises(frozen.FrozenSetLeakError):
             frozen.assert_excluded(lock, group_ids=[test["group_id"]])
+
+    def test_self_consistent_but_malformed_lock_is_rejected(self):
+        original = self.freeze()
+        variations = []
+        for key, value in (
+            ("schema_version", 2), ("schema_version", True),
+            ("files", []), ("files", [None]), ("groups", [None]),
+            ("groups", [original["groups"][0], original["groups"][0]]),
+            ("counts", {"images": 999, "groups": 1}),
+        ):
+            malformed = copy.deepcopy(original)
+            malformed[key] = value
+            variations.append(malformed)
+        for field, value in (("sha256", "not-a-hash"), ("output", "../outside.jpg"), ("group_id", "")):
+            malformed = copy.deepcopy(original)
+            malformed["files"][0][field] = value
+            variations.append(malformed)
+        malformed = copy.deepcopy(original)
+        malformed["files"].append(copy.deepcopy(malformed["files"][0]))
+        variations.append(malformed)
+        path = self.tmp / "malformed-lock.json"
+        for malformed in variations:
+            malformed["lock_hash"] = frozen._lock_hash(malformed["files"], malformed["groups"])
+            path.write_text(json.dumps(malformed))
+            with self.subTest(lock=malformed), self.assertRaises(frozen.FrozenSetError):
+                frozen.load_test_lock(path)
+
+    def test_verify_detects_manifest_membership_and_group_drift(self):
+        path = frozen.save_test_lock(self.freeze(), self.locks)
+        manifest = self.manifest()
+        test_rows = [row for row in manifest["images"] if row["split"] == "test"]
+        test_rows[0]["group_id"] = "changed-group"
+        manifest["images"].remove(test_rows[1])
+        self.write_manifest(manifest)
+        problems = frozen.verify_test_lock(path, self.dataset)
+        self.assertTrue(any("Changed test group_id" in problem for problem in problems))
+        self.assertTrue(any("Removed from test manifest" in problem for problem in problems))
+
+    def test_verify_requires_the_split_manifest(self):
+        path = frozen.save_test_lock(self.freeze(), self.locks)
+        (self.dataset / "split_manifest.json").unlink()
+        with self.assertRaisesRegex(frozen.FrozenSetError, "No split_manifest"):
+            frozen.verify_test_lock(path, self.dataset)
+
+    def test_verify_detects_test_content_copied_to_an_unlisted_training_file(self):
+        lock = self.freeze()
+        path = frozen.save_test_lock(lock, self.locks)
+        shutil.copyfile(self.dataset / lock["files"][0]["output"], self.dataset / "train/renamed-copy.jpg")
+        problems = frozen.verify_test_lock(path, self.dataset)
+        self.assertTrue(any("Frozen test content appears outside test/" in problem for problem in problems))
+
+    def test_freeze_rejects_duplicate_outputs_and_missing_training_files(self):
+        original = self.manifest()
+        repeated = copy.deepcopy(original)
+        repeated["images"].append(copy.deepcopy(repeated["images"][0]))
+        self.write_manifest(repeated)
+        with self.assertRaisesRegex(frozen.FrozenSetError, "Repeated output"):
+            self.freeze()
+        self.write_manifest(original)
+        train = next(row for row in original["images"] if row["split"] == "train")
+        (self.dataset / train["output"]).unlink()
+        with self.assertRaisesRegex(frozen.FrozenSetError, "Manifest image is missing"):
+            self.freeze()
+
+    def test_optional_stable_image_ids_are_locked_and_verified(self):
+        manifest = self.manifest()
+        for number, row in enumerate(manifest["images"]):
+            row["image_id"] = f"image-{number}"
+        self.write_manifest(manifest)
+        lock = self.freeze()
+        path = frozen.save_test_lock(lock, self.locks)
+        test = next(row for row in manifest["images"] if row["split"] == "test")
+        self.assertIn(test["image_id"], {entry["image_id"] for entry in lock["files"]})
+        test["image_id"] = "replaced-image"
+        self.write_manifest(manifest)
+        self.assertTrue(any("Changed test image_id" in problem for problem in frozen.verify_test_lock(path, self.dataset)))
+
+    def test_training_guard_reads_only_the_supplied_non_test_files(self):
+        lock = self.freeze()
+        train = next(row for row in self.manifest()["images"] if row["split"] == "train")
+        train_path = self.dataset / train["output"]
+        with patch.object(frozen, "sha256_of", wraps=frozen.sha256_of) as hashed:
+            frozen.assert_excluded(lock, paths=[train_path], group_ids=[train["group_id"]])
+        self.assertEqual([call.args[0] for call in hashed.call_args_list], [train_path])
+
+    def test_training_guard_rejects_missing_files_and_malformed_locks(self):
+        with self.assertRaisesRegex(frozen.FrozenSetError, "missing or non-file"):
+            frozen.assert_excluded(self.freeze(), paths=[self.tmp / "missing.jpg"])
+        with self.assertRaises(frozen.FrozenSetError):
+            frozen.assert_excluded({"files": [], "groups": []})
 
     def test_command_line_freeze_verify_and_check(self):
         self.assertEqual(frozen.main(["freeze", str(self.dataset), str(self.locks), "--version", "test-v1"]), 0)

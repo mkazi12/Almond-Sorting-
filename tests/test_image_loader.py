@@ -1,9 +1,12 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 from PySide6.QtGui import QImage
+from PySide6.QtWidgets import QApplication
 
 from app.image_loader import ImageLoadError, load_image
 
@@ -11,7 +14,7 @@ from app.image_loader import ImageLoadError, load_image
 class ImageLoaderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.qt_app = QCoreApplication.instance() or QCoreApplication([])
+        cls.qt_app = QApplication.instance() or QApplication([])
 
     def setUp(self):
         temporary_directory = tempfile.TemporaryDirectory()

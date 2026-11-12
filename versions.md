@@ -1,96 +1,44 @@
-# Permitted versions
+# Project versions
 
-This file records the exact versions the team develops and demos against, so a fresh
-checkout reproduces the same setup. If you change a version, update this file and
-`requirements.txt` in the same commit.
+## Python and platform
 
-Status key: **Pinned** = decided and in `requirements.txt`. **TBD** = not chosen yet.
+- Target Python version: 3.12
+- Target platform: Windows
+- Python package versions are pinned in `requirements.txt`.
 
-## Runtime
+Install dependencies:
 
-| Item | Version | Status | Notes |
-|---|---|---|---|
-| Python | 3.12.x (`.python-version` = `3.12`) | Pinned | Supported by PySide6 6.12.0 (its wheels target CPython 3.10+). Python 3.12 is supported upstream until October 2028. |
-
-## Python packages
-
-| Package | Version | Status | Why |
-|---|---|---|---|
-| PySide6_Essentials | 6.12.0 | Pinned | Desktop shell. Provides `QtGui` and `QtWidgets`, the only modules the app imports. |
-| shiboken6 | 6.12.0 | Pinned | Required by PySide6. Must match the PySide6 version. |
-| Image decoder / array library | TBD | TBD (SCRUM-32) | Needed to turn a JPG/PNG into an array for the model. Candidates: Pillow, OpenCV, numpy. |
-| Inference runtime | TBD | TBD (SCRUM-34) | Candidates: onnxruntime, torch. Depends on the model format below. |
-| SQLAlchemy | 2.1.6 | Pinned | Database models and queries (`app/storage`). MIT. |
-| alembic | 1.20.1 | Pinned | Versioned schema migrations. MIT. Pulls in Mako 1.4.3 and MarkupSafe 3.0.4. |
-| psycopg, psycopg-binary | 3.3.6 | Pinned | PostgreSQL driver; the binary wheel bundles libpq for Windows and macOS. LGPL-3.0, used unmodified (same obligations as PySide6). |
-| python-dotenv | 1.2.4 | Pinned | Reads database credentials and the media root from the untracked `.env` file. BSD-3-Clause. |
-
-Not used, so not installed: PySide6_Addons, PySide6_Pdf, PySide6_WebEngine. The full
-`PySide6` meta-package installs these; use `PySide6_Essentials` instead. If a later
-feature needs one of them, add it here with a reason.
-
-## Database
-
-| Item | Version | Status | Notes |
-|---|---|---|---|
-| PostgreSQL | 18.x (dev image `postgres:18.6`) | Pinned | PostgreSQL License. 18 is the minimum: the schema uses `uuidv7()` and the built-in `C.UTF-8` collation. Supported upstream until November 2030. Developers run it with `docker compose up -d`; the Windows PC uses the official PostgreSQL 18 installer. See `docs/database.md`. |
+    python -m pip install -r requirements.txt
 
 ## Model
 
-| Field | Value |
-|---|---|
-| Model name / architecture | TBD |
-| Version | TBD |
-| File name and format (e.g. `.onnx`, `.pt`) | TBD |
-| Source / download link | TBD |
-| License | TBD |
-| SHA-256 checksum | TBD |
-| Input size and preprocessing | TBD |
-| Classes / labels | TBD |
+- Architecture: RF-DETR
+- Task: bounding-box object detection
+- Model variant: to be selected in Sprint 3
+- RF-DETR version: to be selected and pinned
+- PyTorch version: to be selected and pinned
+- Execution device: to be verified on the target workstation
+- Checkpoint: not selected yet
+- Production class map: to be confirmed
 
-Model files are not committed unless the team decides they should be. If they are
-downloaded instead, document the download step here and verify the checksum after
-downloading.
+RF-DETR and PyTorch dependencies will be added when the
+training runner and checkpoint adapter are implemented.
 
-## Camera, sample media, and workstation
+## Checkpoint information
 
-These are also shown in the app under **Recorded setup**. Change
-`app/recorded_setup.py` and this table together.
+When a checkpoint is selected, record:
 
-| Field | Recorded value | Status |
-|---|---|---|
-| Camera protocol / interface | USB UVC | Recorded development camera (not the industrial camera yet) |
-| Resolution | 1280x720 | Recorded |
-| Frame rate | 30 FPS | Recorded |
-| Sample media | `media/Almond sample.jpg` (still frame) | Recorded |
-| Target OS | Windows 11 | Recorded from the current team workstation |
-| Target GPU | AMD Radeon(TM) Graphics | Recorded from the current team workstation |
+- Model name and version
+- Checkpoint filename
+- Source or training run
+- SHA-256 checksum
+- License
+- Class-map filename
+- Input resolution and preprocessing
 
-## Platform assumptions
+## Updating dependencies
 
-- Developed and run as a desktop app (PySide6) on the Windows 11 workstation above.
-  The same PC has an AMD Radeon(TM) Graphics GPU; CPU fallback is still allowed.
-- Verified so far: the pinned packages install on Python 3.12.3 and the app's imports
-  work (Linux, headless/offscreen). Confirm the Windows 11 demo machine before the
-  sprint demo.
-
-## Setting up from a fresh checkout
-
-```bash
-python3.12 -m venv .venv
-# Windows PowerShell:  .venv\Scripts\Activate.ps1
-# macOS/Linux:         source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env            # then set a real DINOS_DB_PASSWORD
-docker compose up -d            # local PostgreSQL 18 (Windows PC: native installer)
-python -m app.storage migrate   # create or update the schema
-<run command, documented in SCRUM-29>
-```
-
-## Updating versions
-
-1. Create a clean virtual environment and install the new version.
-2. Launch the app and open a JPG, a PNG and a malformed file.
-3. Update `requirements.txt`, `.python-version` and this file together.
-4. Save `requirements.txt` as UTF-8. (Redirecting `pip freeze` in Windows PowerShell
-   produces UTF-16; use `pip freeze | Out-File -Encoding utf8 requirements.txt`.)
+1. Update the relevant pin in `requirements.txt`.
+2. Install into a clean Python environment.
+3. Run `python -m pytest -q` and check the desktop app.
+4. Update the Python or model information above if it changed.
