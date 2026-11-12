@@ -84,3 +84,9 @@ python -m pytest -q
 Desktop tests use Qt's offscreen platform. Install the declared dependencies before
 running the complete suite. Source image/result tests and dataset checks run headlessly.
 The earlier database services, database tests, migrations and server setup were removed.
+
+See [RF-DETR dataset export](docs/rfdetr-dataset-export.md) for converting the
+versioned manifests and approved splits into validated COCO train/valid inputs.
+
+See [Configured RF-DETR training](docs/rfdetr-training.md) for pinned training
+dependencies, JSON configuration, validation and the launch command.

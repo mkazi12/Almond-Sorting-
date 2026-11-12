@@ -1,0 +1,18 @@
+{
+  "variant": "nano",
+  "dataset_dir": "../rfdetr-dataset-v1",
+  "initial_checkpoint": "../weights/rf-detr-nano.pth",
+  "device": "cpu",
+  "seed": 42,
+  "output_dir": "../runs/almond-001",
+  "training": {
+    "epochs": 10,
+    "batch_size": 2,
+    "lr": 0.0001,
+    "grad_accum_steps": 4,
+    "num_workers": 0,
+    "weight_decay": 0.0001,
+    "checkpoint_interval": 1,
+    "use_ema": true
+  }
+}
