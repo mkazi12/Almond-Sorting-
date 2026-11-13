@@ -64,10 +64,15 @@ def main():
     )))
     resolved = launch(config)
     run = attempt / "run"
-    for name in ("checkpoint.pth", "checkpoint_best_total.pth", "resolved_config.json", "log.txt"):
+    for name in ("checkpoint.pth", "checkpoint_best_total.pth", "resolved_config.json", "log.txt",
+                 "console.log", "run.json"):
         assert (run / name).is_file(), name
     assert resolved["train_kwargs"]["run_test"] is False
-    print("INTEGRATION PASSED: real one-epoch CPU training, negative image, checkpoint outputs, no test access")
+    record = json.loads((run / "run.json").read_text())
+    assert record["run_id"] == resolved["run_id"] and record["status"] == "completed", record
+    assert record["checkpoints"]["latest"]["epoch"] == 0
+    assert record["checkpoints"]["best"]["selected_by"]["split"] == "valid"
+    print("INTEGRATION PASSED: real one-epoch CPU training, negative image, verified run record, no test access")
 
 
 if __name__ == "__main__":

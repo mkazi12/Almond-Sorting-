@@ -9,6 +9,10 @@ from pathlib import Path
 import random
 from unittest.mock import patch
 
+from app.run_artifacts import (
+    CONSOLE_LOG, RESOLVED_CONFIG, RUN_RECORD, RunArtifactError, capture_console,
+    finalize_run, new_run_id, record_failure, start_run, write_json_atomic,
+)
 
 VARIANTS = {name: f"RFDETR{name.title()}" for name in ("nano", "small", "medium", "base", "large")}
 PIN_FILE = Path(__file__).resolve().parents[1] / "requirements-training.txt"
@@ -145,11 +149,14 @@ def check_device(device, torch):
         fail("device", "MPS was requested but is unavailable")
 
 
-def launch(config_path, *, artifact_writer=None, dry_run=False):
+def launch(config_path, *, artifact_writer=None, dry_run=False, checkpoint_loader=None):
     """Validate first; expose resolved inputs to the artifact writer before fit.
 
     ``artifact_writer(resolved)`` receives all explicit adapter parameters,
     fixed safety settings, dependency versions and canonical paths.
+    A real run gets one run ID and a ``run.json`` record (see
+    ``app.run_artifacts``); ``checkpoint_loader`` overrides ``torch.load``
+    when verifying saved checkpoints.
     """
     resolved = load_config(config_path)
     resolved["installed_dependencies"] = check_dependencies()
@@ -173,8 +180,15 @@ def launch(config_path, *, artifact_writer=None, dry_run=False):
     rfdetr = importlib.import_module("rfdetr")
     model = getattr(rfdetr, VARIANTS[resolved["variant"]])(**model_kwargs)
     output = Path(resolved["output_dir"])
+    resolved["run_id"] = new_run_id()
+    resolved["run_record"] = str(output / RUN_RECORD)
     output.mkdir(parents=True, exist_ok=False)
-    (output / "resolved_config.json").write_text(json.dumps(resolved, indent=2) + "\n")
+    try:
+        write_json_atomic(output / RESOLVED_CONFIG, resolved, operation="write resolved config")
+        start_run(resolved)
+    except RunArtifactError as error:
+        record_failure(output, error.operation, error.path, error, run_id=resolved["run_id"])
+        raise
     if artifact_writer is not None:
         artifact_writer(resolved)
     # RF-DETR 1.3.0 constructs a test dataset even with run_test=False.
@@ -185,8 +199,13 @@ def launch(config_path, *, artifact_writer=None, dry_run=False):
     def validation_only(image_set, **kwargs):
         return original(image_set="val" if image_set == "test" else image_set, **kwargs)
 
-    with patch.object(main, "build_dataset", validation_only):
-        model.train(**train_kwargs)
+    try:
+        with patch.object(main, "build_dataset", validation_only), capture_console(output / CONSOLE_LOG):
+            model.train(**train_kwargs)
+    except BaseException as error:  # includes Ctrl+C: never leave "running"
+        record_failure(output, "train", output, error, run_id=resolved["run_id"])
+        raise
+    finalize_run(output, loader=checkpoint_loader)
     return resolved
 
 
@@ -197,9 +216,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         resolved = launch(args.config, dry_run=args.dry_run)
-    except (TrainingConfigError, OSError, ImportError) as error:
+    except (TrainingConfigError, RunArtifactError, OSError, ImportError) as error:
         parser.exit(2, f"Error: {error}\n")
     print(json.dumps(resolved, indent=2))
+    if not args.dry_run:
+        print(f"Run {resolved['run_id']} completed; record: {resolved['run_record']}")
     return 0
 
 

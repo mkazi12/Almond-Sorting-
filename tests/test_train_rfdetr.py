@@ -7,6 +7,7 @@ import pytest
 from app.train_rfdetr import TrainingConfigError, check_dependencies, launch, load_config
 from app.dataset.manifest import build_manifest
 from app.dataset.rfdetr_export import SplitAssignment, export_rfdetr_dataset
+from tests.checkpoint_fakes import load_fake, write_fake_checkpoint, write_metrics_log
 from tests.fixtures.load_dataset_fixture import load_dataset_fixture
 
 
@@ -67,11 +68,17 @@ def test_launch_dispatches_typed_parameters_and_exposes_resolved_config(config):
     def train(**kwargs):
         assert upstream.build_dataset("test", args="inputs", resolution=512) == "validation dataset"
         original_builder.assert_called_once_with(image_set="val", args="inputs", resolution=512)
+        assert json.loads((run / "run.json").read_text())["status"] == "running"
+        print("upstream training output")
+        write_metrics_log(run / "log.txt", [0.2, 0.3, 0.1])
+        write_fake_checkpoint(run / "checkpoint.pth", epoch=2)
+        write_fake_checkpoint(run / "checkpoint_best_total.pth", stripped=True)
 
+    run = path.parent / "run"
     model.train.side_effect = train
     with patch("app.train_rfdetr.check_dependencies", return_value={"rfdetr": "1.3.0"}), \
          patch("app.train_rfdetr.importlib.import_module", side_effect=modules.__getitem__):
-        resolved = launch(path, artifact_writer=writer)
+        resolved = launch(path, artifact_writer=writer, checkpoint_loader=load_fake)
     factory.assert_called_once_with(pretrain_weights=str(path.parent / "initial.pth"), device="cpu")
     kwargs = model.train.call_args.kwargs
     assert kwargs["epochs"] == 3 and type(kwargs["epochs"]) is int
@@ -84,6 +91,29 @@ def test_launch_dispatches_typed_parameters_and_exposes_resolved_config(config):
     assert json.loads((path.parent / "run" / "resolved_config.json").read_text()) == resolved
     assert upstream.build_dataset is original_builder
     torch.manual_seed.assert_called_once_with(17)
+    record = json.loads((run / "run.json").read_text())
+    assert record["run_id"] == resolved["run_id"] and record["status"] == "completed"
+    assert resolved["run_record"] == str(run / "run.json")
+    assert record["checkpoints"]["latest"]["epoch"] == 2
+    assert record["checkpoints"]["best"]["selected_by"]["epoch"] == 1
+    assert "upstream training output" in (run / "console.log").read_text()
+
+
+def test_training_failure_is_recorded_under_the_run_id(config):
+    path, _ = config
+    model = Mock()
+    model.train.side_effect = RuntimeError("CUDA out of memory")
+    modules = {"torch": Mock(), "numpy": Mock(), "rfdetr": SimpleNamespace(RFDETRSmall=Mock(return_value=model)),
+               "rfdetr.main": SimpleNamespace(build_dataset=Mock())}
+    with patch("app.train_rfdetr.check_dependencies", return_value={}), \
+         patch("app.train_rfdetr.importlib.import_module", side_effect=modules.__getitem__):
+        with pytest.raises(RuntimeError, match="out of memory"):
+            launch(path)
+    record = json.loads((path.parent / "run" / "run.json").read_text())
+    assert record["status"] == "failed"
+    assert record["failure"]["operation"] == "train"
+    assert record["failure"]["path"] == str(path.parent / "run")
+    assert record["checkpoints"] == {"latest": None, "best": None}
 
 
 def test_unavailable_cuda_stops_before_model_import(config):

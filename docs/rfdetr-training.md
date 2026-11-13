@@ -36,6 +36,10 @@ checkpoint; a corrupt or incompatible checkpoint can still fail then.
 Unknown fields, numeric strings, boolean integers and invalid numeric ranges
 are rejected. Defaults are expanded in `resolved_config.json` before fitting.
 
+Each real launch records a run ID, metadata, separate latest and best
+checkpoints and logs in `output_dir/run.json`; see
+[run-artifacts.md](run-artifacts.md).
+
 `launch(config_path, artifact_writer=callback)` supplies that same resolved
 dictionary to a later run-artifact writer. It includes constructor arguments,
 training arguments, seed, absolute paths, safety settings and dependency pins.
