@@ -76,6 +76,20 @@ its output is not the labeled RF-DETR COCO exporter.
 Keep frozen test images out of fitting, validation, confidence tuning and model selection;
 see [frozen_test_set.md](docs/frozen_test_set.md). Final locked testing belongs to Sprint 8.
 
+Evaluate a checkpoint against validation with a versioned manifest, split manifest,
+frozen test lock, and approved class map. The lock is mandatory; confidence and IoU
+thresholds must be supplied explicitly:
+
+```powershell
+python -m app.evaluate DATASET_ROOT MANIFEST SPLIT_MANIFEST TEST_LOCK `
+	CHECKPOINT CLASS_MAP OUTPUT --variant nano --confidence-floor 0.5 --iou-threshold 0.5
+```
+
+The JSON report records checkpoint and dataset identity, validation image IDs, per-image
+predictions and labels, mAP@0.50, mAP@0.50:0.95, per-class AP, operating precision/recall,
+supporting object counts, and the evaluation settings. It is written only after all selected
+validation images complete successfully.
+
 ## Tests and Sprint 3
 
 ```bash
