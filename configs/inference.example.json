@@ -1,0 +1,7 @@
+{
+  "checkpoint": "../runs/almond-001/checkpoint_best_total.pth",
+  "class_map": "../manifests/class-map.json",
+  "variant": "nano",
+  "device": "cpu",
+  "confidence_floor": 0.5
+}

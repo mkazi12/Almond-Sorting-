@@ -44,6 +44,7 @@ and sharing; reopen results through JSON. See [local_files.md](docs/local_files.
 | `app/__main__.py` | Desktop startup |
 | `app/ui/` | Image/result dialogs, preview and overlays |
 | `app/inference.py` | Validated RGB inputs, detector protocol and prediction records |
+| `app/rfdetr_adapter.py` | RF-DETR checkpoint loading and prediction; see [rfdetr-inference.md](docs/rfdetr-inference.md) |
 | `app/results.py` | Validated local JSON save/reopen and CSV export |
 | `app/image_loader.py` | Qt image loading and actionable errors |
 | `app/dataset/` | Headless import, labels, grouping, split manifests, audit and frozen-test guards; separate Qt ground-truth preview |
