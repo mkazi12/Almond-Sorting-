@@ -386,9 +386,18 @@ def evaluate_validation(
     iou_threshold: float,
     detector_loader: Callable | None = None,
     image_reader: Callable[[Path], RGBImage] | None = None,
+    benchmark_output=None,
+    warmup_runs: int | None = None,
+    report_output=None,
 ) -> dict:
     """Run validation, then atomically write and return its complete report."""
     floor = confidence_value(confidence_floor)
+    if report_output is not None and benchmark_output is None:
+        raise EvaluationError("report_output requires benchmark_output")
+    if warmup_runs is not None and benchmark_output is None:
+        raise EvaluationError("warmup_runs requires benchmark_output")
+    if warmup_runs is not None and (type(warmup_runs) is not int or warmup_runs < 0):
+        raise EvaluationError("warmup_runs must be a nonnegative integer")
     if isinstance(iou_threshold, bool) or not isinstance(iou_threshold, (int, float)):
         raise EvaluationError("IoU threshold must be a finite number between 0 and 1.")
     iou_threshold = float(iou_threshold)
@@ -427,6 +436,24 @@ def evaluate_validation(
         prepared.append((image, assignment, image_path, _labels_for(image, dataset, class_map)))
 
     checkpoint = Path(checkpoint_path).expanduser().resolve()
+    if benchmark_output is not None:
+        targets = [Path(p).expanduser().resolve() for p in (output_path, benchmark_output)]
+        if report_output is not None:
+            targets.append(Path(report_output).expanduser().resolve())
+        protected = {Path(p).resolve() for p in
+                     (manifest_path, split_manifest_path, frozen_test_lock_path,
+                      checkpoint_path, class_map_path)}
+        protected.update(dataset.resolve(image.image_path) for image in dataset.accepted)
+        protected.update(dataset.resolve(image.annotation_path) for image in dataset.accepted)
+        if len(set(targets)) != len(targets) or any(p in protected for p in targets):
+            raise EvaluationError("Benchmark outputs must be distinct from each other and inputs")
+        for target in targets:
+            if target.exists():
+                raise EvaluationError(f"Benchmark-enabled runs require new output files: {target}")
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                raise EvaluationError(f"Invalid output directory: {target}: {error}") from error
     if not checkpoint.is_file():
         raise EvaluationError(f"Checkpoint file is missing: {checkpoint}")
     try:
@@ -475,6 +502,7 @@ def evaluate_validation(
             "labels": labels,
             **matched,
         })
+        del rgb_image
 
     metrics = _calculate_metrics(records, class_map, floor, iou_threshold)
     operating_point = metrics["operating_point"]
@@ -525,9 +553,39 @@ def evaluate_validation(
     try:
         target = Path(output_path).expanduser().resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
-        write_json_atomic(target, report, operation="write evaluation report")
+        write_json_atomic(target, report, operation="write evaluation report",
+                          overwrite=benchmark_output is None)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         raise EvaluationError(f"Cannot write complete evaluation report: {error}") from error
+    if benchmark_output is not None:
+        from app.benchmark import benchmark_validation
+
+        try:
+            _select_validation(dataset, assignments, frozen_lock)
+            measurements = benchmark_validation(
+                detector, ((image, path) for image, _, path, _ in prepared),
+                image_reader=read_image, class_map=class_map, confidence_floor=floor,
+                device=device, warmup_runs=5 if warmup_runs is None else warmup_runs,
+            )
+            benchmark = {
+                "schema_version": 1, "evaluation_id": report["evaluation_id"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "evaluation_created_at": report["created_at"],
+                "evaluation_sha256": sha256_file(target),
+                "checkpoint": report["checkpoint"], "dataset": report["dataset"],
+                "settings": report["settings"], "benchmark": measurements,
+            }
+            write_json_atomic(targets[1], benchmark, operation="write benchmark", overwrite=False)
+        except (OSError, RuntimeError, ImportError, AttributeError, TypeError, ValueError) as error:
+            raise EvaluationError(
+                f"Benchmark failed; valid evaluation retained at {target}: {error}"
+            ) from error
+    if report_output is not None:
+        from app.evaluation_report import ReportError, generate_report
+        try:
+            generate_report(target, targets[1], targets[2])
+        except ReportError as error:
+            raise EvaluationError(f"Reporting failed; evaluation and benchmark JSON retained: {error}") from error
     return report
 
 
@@ -544,12 +602,17 @@ def main(argv=None) -> int:
     parser.add_argument("--device", default="cpu", choices=("cpu", "cuda", "mps"))
     parser.add_argument("--confidence-floor", required=True, type=float)
     parser.add_argument("--iou-threshold", required=True, type=float)
+    parser.add_argument("--benchmark-output", type=Path)
+    parser.add_argument("--warmup-runs", type=int)
+    parser.add_argument("--report-output", type=Path)
     args = parser.parse_args(argv)
     try:
         report = evaluate_validation(
             args.dataset_root, args.manifest, args.split_manifest, args.frozen_test_lock,
             args.checkpoint, args.class_map, args.output, variant=args.variant, device=args.device,
             confidence_floor=args.confidence_floor, iou_threshold=args.iou_threshold,
+            benchmark_output=args.benchmark_output, warmup_runs=args.warmup_runs,
+            report_output=args.report_output,
         )
     except EvaluationError as error:
         parser.exit(2, f"Evaluation failed: {error}\n")
