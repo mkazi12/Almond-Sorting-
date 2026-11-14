@@ -106,6 +106,169 @@ def test_evaluates_exact_validation_ids_and_records_predictions_labels_and_rules
     assert json.loads((tmp_path / "evaluation.json").read_text()) == report
 
 
+def test_benchmark_links_saved_evaluation_without_schema_changes(tmp_path):
+    from app.checkpoint import sha256_file
+    report, detector = run(tmp_path, benchmark_output=tmp_path / "benchmark.json", warmup_runs=2)
+    saved = json.loads((tmp_path / "benchmark.json").read_text())
+    assert saved["evaluation_id"] == report["evaluation_id"]
+    assert saved["evaluation_sha256"] == sha256_file(tmp_path / "evaluation.json")
+    for key in ("checkpoint", "dataset", "settings"):
+        assert saved[key] == report[key]
+    assert "benchmark" not in report
+    assert saved["benchmark"]["sample_count"] == 1
+    assert len(detector.calls) == 4
+
+
+def test_evaluation_benchmark_and_report_command(tmp_path, monkeypatch):
+    from app import evaluate
+    dataset, manifest, splits, lock, classes, checkpoint = inputs(tmp_path)
+    monkeypatch.setattr(evaluate, "load_detector", lambda *args, **kwargs: FakeDetector())
+    assert evaluate.main([str(dataset.root), str(manifest), str(splits), str(lock),
+                          str(checkpoint), str(classes), str(tmp_path / "evaluation.json"),
+                          "--variant", "nano", "--confidence-floor", "0.5", "--iou-threshold", "0.5",
+                          "--benchmark-output", str(tmp_path / "benchmark.json"),
+                          "--report-output", str(tmp_path / "report.md")]) == 0
+    assert "# Validation evaluation report" in (tmp_path / "report.md").read_text()
+
+
+def test_report_requires_benchmark(tmp_path):
+    with pytest.raises(EvaluationError, match="report_output requires"):
+        run(tmp_path, report_output=tmp_path / "report.md")
+
+
+def test_report_path_collision_precedes_inference(tmp_path):
+    detector = FakeDetector()
+    with pytest.raises(EvaluationError, match="distinct"):
+        run(tmp_path, detector=detector, benchmark_output=tmp_path / "benchmark.json",
+            report_output=tmp_path / "evaluation.json")
+    assert detector.calls == []
+
+
+def test_reporting_failure_retains_json_only(tmp_path, monkeypatch):
+    from app.evaluation_report import ReportError
+    def fail(*args):
+        raise ReportError("fixture report failure")
+    monkeypatch.setattr("app.evaluation_report.generate_report", fail)
+    with pytest.raises(EvaluationError, match="JSON retained"):
+        run(tmp_path, benchmark_output=tmp_path / "benchmark.json", report_output=tmp_path / "report.md")
+    assert (tmp_path / "evaluation.json").exists() and (tmp_path / "benchmark.json").exists()
+    assert not (tmp_path / "report.md").exists()
+
+
+def test_benchmark_failure_retains_only_valid_evaluation(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("fixture benchmark failure")
+    monkeypatch.setattr("app.benchmark.benchmark_validation", fail)
+    with pytest.raises(EvaluationError, match="valid evaluation retained"):
+        run(tmp_path, benchmark_output=tmp_path / "benchmark.json")
+    assert json.loads((tmp_path / "evaluation.json").read_text())["metrics"]
+    assert not (tmp_path / "benchmark.json").exists()
+
+
+@pytest.mark.parametrize("name", ["evaluation.json", "checkpoint.pth", "classes.json"])
+def test_benchmark_rejects_output_collisions_before_loading(tmp_path, name):
+    detector = FakeDetector()
+    with pytest.raises(EvaluationError, match="distinct"):
+        run(tmp_path, detector=detector, benchmark_output=tmp_path / name)
+    assert detector.calls == []
+
+
+def test_benchmark_refuses_existing_output(tmp_path):
+    target = tmp_path / "benchmark.json"
+    target.write_text("existing result")
+    with pytest.raises(EvaluationError, match="new output"):
+        run(tmp_path, benchmark_output=target)
+    assert target.read_text() == "existing result"
+
+
+def test_benchmark_write_failure_does_not_publish_partial_file(tmp_path, monkeypatch):
+    from app import evaluate
+    original = evaluate.write_json_atomic
+    def write(path, document, **kwargs):
+        if kwargs.get("operation") == "write benchmark":
+            raise OSError("fixture disk full")
+        return original(path, document, **kwargs)
+    monkeypatch.setattr(evaluate, "write_json_atomic", write)
+    with pytest.raises(EvaluationError, match="disk full"):
+        run(tmp_path, benchmark_output=tmp_path / "benchmark.json")
+    assert (tmp_path / "evaluation.json").exists()
+    assert not (tmp_path / "benchmark.json").exists()
+
+
+@pytest.mark.parametrize("filename", ["evaluation.json", "benchmark.json"])
+def test_combined_workflow_preserves_concurrently_created_json(tmp_path, monkeypatch, filename):
+    from app import run_artifacts
+    original = run_artifacts.os.link
+    concurrent = tmp_path / filename
+    marker = b'{"owner": "another process"}'
+
+    def race(source, destination):
+        if Path(destination) == concurrent:
+            concurrent.write_bytes(marker)
+        original(source, destination)
+
+    monkeypatch.setattr(run_artifacts.os, "link", race)
+    with pytest.raises(EvaluationError):
+        run(tmp_path, benchmark_output=tmp_path / "benchmark.json", report_output=tmp_path / "report.md")
+    assert concurrent.read_bytes() == marker
+    assert not (tmp_path / "report.md").exists()
+    assert not list(tmp_path.glob(".*.tmp"))
+    if filename == "evaluation.json":
+        assert not (tmp_path / "benchmark.json").exists()
+    else:
+        assert json.loads((tmp_path / "evaluation.json").read_text())["metrics"]
+
+
+def test_evaluation_only_still_overwrites_existing_result(tmp_path):
+    target = tmp_path / "evaluation.json"
+    target.write_text("old evaluation")
+    report, _ = run(tmp_path)
+    assert json.loads(target.read_text()) == report
+
+
+def test_no_link_support_fails_without_publishing_json(tmp_path, monkeypatch):
+    from app import run_artifacts
+    original = run_artifacts.os.link
+    def unsupported(source, destination):
+        if Path(destination) == tmp_path / "evaluation.json":
+            raise OSError("hard links unsupported")
+        return original(source, destination)
+    monkeypatch.setattr("app.run_artifacts.os.link", unsupported)
+    with pytest.raises(EvaluationError, match="hard links unsupported"):
+        run(tmp_path, benchmark_output=tmp_path / "benchmark.json", report_output=tmp_path / "report.md")
+    assert not (tmp_path / "evaluation.json").exists()
+    assert not (tmp_path / "benchmark.json").exists()
+    assert not (tmp_path / "report.md").exists()
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize("warmup", [-1, True, 1.5])
+def test_invalid_benchmark_warmup(tmp_path, warmup):
+    with pytest.raises(EvaluationError, match="nonnegative integer"):
+        run(tmp_path, benchmark_output=tmp_path / "benchmark.json", warmup_runs=warmup)
+
+
+def test_warmup_requires_benchmark(tmp_path):
+    with pytest.raises(EvaluationError, match="requires"):
+        run(tmp_path, warmup_runs=5)
+
+
+def test_benchmark_rechecks_frozen_content(tmp_path, monkeypatch):
+    from app import evaluate
+    original = evaluate._select_validation
+    calls = []
+    def select(*args):
+        calls.append(True)
+        if len(calls) == 2:
+            raise EvaluationError("Frozen test membership conflict")
+        return original(*args)
+    monkeypatch.setattr(evaluate, "_select_validation", select)
+    with pytest.raises(EvaluationError, match="Frozen test membership"):
+        run(tmp_path, benchmark_output=tmp_path / "benchmark.json")
+    assert len(calls) == 2
+    assert not (tmp_path / "benchmark.json").exists()
+
+
 def test_known_fixture_predictions_produce_ap_operating_counts_and_unavailable_empty_class(tmp_path):
     detector = FakeDetector((
         Detection(1, 0.9, (10, 10, 30, 25)),
