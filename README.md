@@ -90,6 +90,13 @@ predictions and labels, mAP@0.50, mAP@0.50:0.95, per-class AP, operating precisi
 supporting object counts, and the evaluation settings. It is written only after all selected
 validation images complete successfully.
 
+For optional streaming workstation timings, add `--benchmark-output PATH`
+and optionally `--warmup-runs N`. See [validation benchmarking](docs/rfdetr-evaluation.md)
+for the real-checkpoint command, timing definition and artifact failure behavior.
+Add `--report-output PATH.md` alongside `--benchmark-output` for a Markdown report
+verified against both saved JSON artifacts. Existing artifacts can also be rendered
+with `python -m app.evaluation_report EVALUATION_JSON BENCHMARK_JSON REPORT.md`.
+
 ## Tests and Sprint 3
 
 ```bash

@@ -64,8 +64,12 @@ def new_run_id(now: datetime | None = None) -> str:
     return f"{now:%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"
 
 
-def write_json_atomic(path, document, *, operation: str = "write") -> Path:
-    """Publish complete JSON or nothing: temp file, fsync, then replace."""
+def write_json_atomic(path, document, *, operation: str = "write", overwrite: bool = True) -> Path:
+    """Publish complete JSON: replace by default, or atomically require a new file.
+
+    No-overwrite publication uses a same-directory hard link and fails closed
+    on filesystems without hard-link support.
+    """
     path = Path(path)
     temporary = None
     try:
@@ -77,8 +81,11 @@ def write_json_atomic(path, document, *, operation: str = "write") -> Path:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        temporary = None
+        if overwrite:
+            os.replace(temporary, path)
+            temporary = None
+        else:
+            os.link(temporary, path)
         return path
     except (OSError, TypeError, ValueError) as error:
         raise RunArtifactError(operation, path, error) from error

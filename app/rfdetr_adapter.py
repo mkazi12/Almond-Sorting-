@@ -94,6 +94,11 @@ class RFDETRDetector:
         self.device = device
 
     @property
+    def input_resolution(self) -> int:
+        """Actual square input side used by RF-DETR 1.3.0 predict."""
+        return self._model.model.resolution
+
+    @property
     def model_label(self) -> str:
         return f"rfdetr-{self.variant}:{self.checkpoint.path.name}@{self.checkpoint.sha256[:12]}"
 

@@ -93,6 +93,7 @@ def load(checkpoint, model=None, classes=CLASSES, variant="nano"):
 def test_compatible_checkpoint_and_class_map_load(checkpoint):
     model = FakeRFDETR()
     detector = load(checkpoint, model)
+    assert detector.input_resolution == 64
     assert model.calls == [(str(checkpoint), "cpu")]
     assert detector.class_map == CLASSES
     assert detector.model_label.startswith("rfdetr-nano:best.pth@")
