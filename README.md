@@ -97,6 +97,10 @@ Add `--report-output PATH.md` alongside `--benchmark-output` for a Markdown repo
 verified against both saved JSON artifacts. Existing artifacts can also be rendered
 with `python -m app.evaluation_report EVALUATION_JSON BENCHMARK_JSON REPORT.md`.
 
+To compare operating confidence thresholds on validation, sweep a saved evaluation with
+`python -m app.threshold_sweep EVALUATION_JSON SWEEP.json --min-confidence 0.5 --max-confidence 0.95`.
+See [confidence threshold sweep](docs/rfdetr-evaluation.md#confidence-threshold-sweep-scrum-67).
+
 ## Tests and Sprint 3
 
 ```bash
