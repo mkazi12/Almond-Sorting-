@@ -42,6 +42,15 @@ def source_label(value: str | None) -> str:
     return normalized
 
 
+def analysis_metadata(image) -> dict[str, str]:
+    """Optional diagnostic fields; omission preserves legacy manifests and hashes."""
+    return {
+        name: value
+        for name in ("lighting", "almond_type")
+        if (value := getattr(image, name)) is not None
+    }
+
+
 def _require_text(value: str, message: str) -> str:
     stripped = value.strip()
     if not stripped:
@@ -159,6 +168,8 @@ class AcceptedImage:
     source_lot: str | None
     source_session: str | None
     near_duplicate_group_id: str | None
+    lighting: str | None = None
+    almond_type: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -179,6 +190,11 @@ class AcceptedImage:
         object.__setattr__(self, "height", height)
         object.__setattr__(self, "source_lot", _normalize_source_value(self.source_lot))
         object.__setattr__(self, "source_session", _normalize_source_value(self.source_session))
+        for field in ("lighting", "almond_type"):
+            value = getattr(self, field)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"{field} must be a string or None.")
+            object.__setattr__(self, field, _normalize_source_value(value))
         object.__setattr__(
             self,
             "near_duplicate_group_id",
@@ -327,6 +343,7 @@ def canonical_content(dataset: DatasetInput) -> dict[str, Any]:
                 "source_lot": image.source_lot,
                 "source_session": image.source_session,
                 "near_duplicate_group_id": image.near_duplicate_group_id,
+                **analysis_metadata(image),
             }
             for image in sorted(dataset.accepted, key=lambda item: item.image_id)
         ],
