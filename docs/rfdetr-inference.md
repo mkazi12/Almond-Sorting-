@@ -65,8 +65,9 @@ rather than partly loaded. All errors include the checkpoint path.
   Outputs at indices that are not configured category IDs (for example
   index 0, which has no training targets) are dropped.
 - **Confidence:** every detection has a finite confidence in [0, 1] and at or
-  above the floor. RF-DETR keeps scores strictly above its threshold; the
-  adapter passes the floor as that threshold and also filters itself.
+  above the floor. RF-DETR keeps scores strictly above its threshold, so the
+  adapter requests threshold 0 (all of RF-DETR's fixed top-k candidates) and
+  applies the inclusive floor itself; a score equal to the floor is kept.
 - **Boxes:** `[left, top, right, bottom]` in original-image pixels, with
   `left < right` and `top < bottom`, clipped to the image. Boxes entirely
   outside the image are dropped.

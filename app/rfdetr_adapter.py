@@ -115,7 +115,10 @@ class RFDETRDetector:
 
         pixels = Image.frombytes("RGB", (image.width, image.height), image.pixels)
         try:
-            raw = self._model.predict(pixels, threshold=floor)
+            # RF-DETR 1.3.0 keeps ``scores > threshold`` (strict) after its fixed
+            # top-k selection. Ask for every top-k candidate and apply the
+            # inclusive floor in ``_convert`` so a score equal to the floor is kept.
+            raw = self._model.predict(pixels, threshold=0.0)
         except Exception as error:
             raise InferenceError(f"RF-DETR prediction failed: {type(error).__name__}: {error}") from error
         return self._convert(raw, image.width, image.height, floor)

@@ -28,6 +28,7 @@ runs/almond-001/
 | `checkpoints.latest` | `checkpoint.pth`, its SHA-256, size and epoch |
 | `checkpoints.best` | `checkpoint_best_total.pth`, its SHA-256, size and the selection (metric, split, source, epoch, value) |
 | `failure` | Operation, path and error when the run failed |
+| `lineage` | `null`, or the parent run, experiment and changes for an experiment launch; see [experiments](rfdetr-training.md#experiments-derived-from-a-previous-run-scrum-68) |
 
 ## Latest and best checkpoints
 

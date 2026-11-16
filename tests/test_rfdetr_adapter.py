@@ -155,7 +155,7 @@ def test_invalid_configuration_is_rejected(checkpoint, classes, variant):
 def test_square_resize_is_mapped_back_to_original_pixels(checkpoint):
     model = FakeRFDETR(resolution=64)
     result = load(checkpoint, model).predict(rgb(200, 80, (50, 20, 150, 60)), confidence_floor=0.5)
-    assert model.calls[-1] == ("predict", (200, 80), 0.5)  # full original image, not a resized copy
+    assert model.calls[-1] == ("predict", (200, 80), 0.0)  # full original image, not a resized copy
     (detection,) = result.detections
     assert detection.bbox_xyxy == pytest.approx((50, 20, 150, 60), abs=200 / 64)
     assert (result.image_width, result.image_height) == (200, 80)
@@ -260,3 +260,12 @@ def test_invalid_inference_config_names_the_problem(tmp_path, change, field):
     (tmp_path / "inference.json").write_text(json.dumps(raw))
     with pytest.raises(ValueError, match=field):
         load_inference_config(tmp_path / "inference.json")
+
+
+def test_score_equal_to_floor_is_kept_despite_rfdetr_strict_threshold(checkpoint):
+    # RF-DETR 1.3.0 filters with ``scores > threshold``; the adapter's documented
+    # boundary is inclusive, so a score exactly at the floor must survive.
+    model = FakeRFDETR(extra=[((5, 5, 20, 20), 0.5, 1), ((30, 5, 45, 20), 0.49, 1)])
+    result = load(checkpoint, model).predict(rgb(), confidence_floor=0.5)
+    assert sorted(item.confidence for item in result.detections) == [0.5, 0.9]
+    assert model.calls[-1][2] == 0.0

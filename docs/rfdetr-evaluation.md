@@ -125,3 +125,35 @@ These checks establish implementation correctness, not real model speed. When
 weights and approved validation inputs become available, run the command above,
 check the recorded identities, sample count and hardware, and retain both JSON
 files as the real integration benchmark evidence.
+
+## Confidence threshold sweep (SCRUM-67)
+
+Shows how validation precision and recall change as the operating confidence
+threshold rises, as evidence for choosing a threshold later. It reads only a
+saved evaluation JSON: no model, no images, so frozen test images are never read.
+
+```powershell
+python -m app.threshold_sweep results/evaluation.json results/sweep.json `
+  --min-confidence 0.5 --max-confidence 0.95 --step 0.05
+```
+
+- The range is inclusive and must be a whole number of steps. Values are exact
+  decimals (`0.5 + 3 x 0.1` is `0.8`, not `0.8000000000000002`).
+- A prediction is kept when `confidence >= threshold`, the adapter's floor rule.
+  Kept predictions are re-matched with the evaluation's matching rule and IoU
+  threshold, so the threshold equal to the floor reproduces the evaluation's
+  operating precision and recall.
+- The evaluation only kept predictions at or above its `--confidence-floor`;
+  a lower threshold is rejected. Re-run `app.evaluate` with a lower floor first.
+- The evaluation is rejected unless it is validation-only and its saved matches
+  are reproduced by the matching rule.
+- Output records the source evaluation (ID, path, SHA-256), checkpoint, dataset
+  identity, floor, thresholds, threshold rule, IoU threshold and matching rules.
+  `results[]` holds overall and per-class ground-truth, prediction, TP, FP and
+  FN counts with precision and recall for each threshold. `recall` is `null`
+  for a class with no validation ground truth and `precision` is `null` when no
+  predictions remain: unavailable, not zero.
+
+```powershell
+.venv/Scripts/python.exe -m pytest tests/test_threshold_sweep.py -q
+```

@@ -1,6 +1,7 @@
 # Local Python environments, including the team's existing environment name.
 /venv/
 /.venv/
+/.venv-training/
 /env/
 
 # Python and test output.
