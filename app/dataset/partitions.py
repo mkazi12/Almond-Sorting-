@@ -18,6 +18,7 @@ from app.dataset.records import (
     ClassSpec,
     DatasetInput,
     GroundTruthObject,
+    analysis_metadata,
     objects_for_image,
     relative_path_identity,
 )
@@ -48,6 +49,7 @@ class PartitionImage:
             "source_lot": image.source_lot,
             "source_session": image.source_session,
             "near_duplicate_group_id": image.near_duplicate_group_id,
+            **analysis_metadata(image),
             "group_id": self.group_id,
             "split": self.split,
             "objects": [

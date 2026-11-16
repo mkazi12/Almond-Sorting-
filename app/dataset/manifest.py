@@ -29,6 +29,7 @@ from app.dataset.records import (
     AcceptedImage,
     DatasetInput,
     SourcePolicy,
+    analysis_metadata,
     eligible_for_split,
     missing_provenance_fields,
     objects_for_image,
@@ -58,6 +59,8 @@ class ManifestImage:
     near_duplicate_group_id: str | None
     split_eligible: bool
     split_blockers: tuple[str, ...]
+    lighting: str | None = None
+    almond_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,6 +73,7 @@ class ManifestImage:
             "source_session": self.source_session,
             "split_blockers": list(self.split_blockers),
             "split_eligible": self.split_eligible,
+            **analysis_metadata(self),
         }
 
 
@@ -137,6 +141,8 @@ def _manifest_image(dataset: DatasetInput, image: AcceptedImage) -> ManifestImag
         source_lot=image.source_lot,
         source_session=image.source_session,
         near_duplicate_group_id=image.near_duplicate_group_id,
+        lighting=image.lighting,
+        almond_type=image.almond_type,
         split_eligible=eligible_for_split(image, policy),
         split_blockers=missing_provenance_fields(image, policy),
     )

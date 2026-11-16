@@ -107,7 +107,7 @@ def import_coco_dataset(
             rel = safe_relative_path(key)
             if not isinstance(value, Mapping):
                 raise DatasetValidationError("invalid_provenance", f"Provenance for {rel} must be a mapping.")
-            for field in ("source_lot", "source_session", "near_duplicate_group_id"):
+            for field in ("source_lot", "source_session", "near_duplicate_group_id", "lighting", "almond_type"):
                 if field in value and value[field] is not None and not isinstance(value[field], str):
                     raise DatasetValidationError("invalid_provenance", f"{rel}: {field} must be a string or None.")
             metadata[rel] = value
@@ -156,6 +156,8 @@ def import_coco_dataset(
             source_lot=extra.get("source_lot"),
             source_session=extra.get("source_session"),
             near_duplicate_group_id=extra.get("near_duplicate_group_id"),
+            lighting=extra.get("lighting"),
+            almond_type=extra.get("almond_type"),
         ))
         parsed_images.append(checked.image)
         parsed_objects.extend(checked.objects)

@@ -46,7 +46,8 @@ from app.inference import (
     validate_class_map,
     validate_result,
 )
-from app.run_artifacts import new_run_id, write_json_atomic
+from app.run_artifacts import new_run_id, sha256_text, write_json_atomic
+from app.error_summary import summarize_validation_errors
 from app.rfdetr_adapter import load_detector
 
 
@@ -110,6 +111,143 @@ def _match(predictions: tuple[Detection, ...], labels: list[dict], iou_threshold
         "matches": matches,
         "false_positive_prediction_indices": false_positives,
         "false_negative_label_indices": sorted(unmatched),
+    }
+
+
+def extract_validation_errors(evaluation: dict) -> dict:
+    """Explain saved operating-point matches without changing metric counts."""
+    settings = evaluation["settings"]
+    if settings["split"] != "valid" or settings["matching_rule"] != MATCHING_RULE:
+        raise EvaluationError("Error extraction requires supported validation matching settings.")
+    threshold = settings["iou_threshold"]
+    if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+            or not math.isfinite(threshold) or not 0 <= threshold <= 1):
+        raise EvaluationError("Invalid saved IoU threshold.")
+    ids = evaluation["dataset"]["validation_image_ids"]
+    if not ids or len(set(ids)) != len(ids):
+        raise EvaluationError("Validation image IDs must be nonempty and unique.")
+    if [row["image_id"] for row in evaluation["records"]] != ids:
+        raise EvaluationError("Error extraction membership differs from validation membership.")
+
+    names = {row["class_id"]: row["class_name"] for row in evaluation["classes"]}
+    errors = []
+    matched_count = 0
+    by_type = dict.fromkeys(
+        ("false_positive", "miss", "class_confusion", "localization"), 0
+    )
+    diagnostic_rule = "tp_then_duplicates_then_confusion_then_localization_then_unmatched"
+
+    for record in evaluation["records"]:
+        labels, predictions = record["labels"], record["predictions"]
+        detections = tuple(Detection(
+            item["category_id"], item["confidence"], tuple(item["bbox_xyxy"])
+        ) for item in predictions)
+        if list(detections) != sorted(detections, key=lambda item: -item.confidence):
+            raise EvaluationError("Saved predictions must retain descending-confidence order.")
+        expected = _match(detections, labels, threshold)
+        if any(record[key] != value for key, value in expected.items()):
+            raise EvaluationError("Saved assignments disagree with the configured matching rule.")
+        matched_count += len(expected["matches"])
+        remaining_predictions = set(expected["false_positive_prediction_indices"])
+        remaining_labels = set(expected["false_negative_label_indices"])
+        matched_labels = {item["label_index"] for item in expected["matches"]}
+
+        def emit(kind, prediction_index=None, label_index=None, overlap=None, reason=None):
+            label = None if label_index is None else {
+                **labels[label_index],
+                "label_index": label_index,
+                "class_name": names[labels[label_index]["category_id"]],
+                "confidence": None,
+            }
+            prediction = None if prediction_index is None else {
+                **predictions[prediction_index],
+                "prediction_index": prediction_index,
+                "class_name": names[predictions[prediction_index]["category_id"]],
+            }
+            identity = json.dumps([
+                evaluation["evaluation_id"], record["image_id"], kind,
+                prediction_index, label_index,
+            ])
+            errors.append({
+                "error_id": "err-" + sha256_text(identity),
+                "image_id": record["image_id"],
+                "image_path": record["image_path"],
+                "image_sha256": record["image_sha256"],
+                "error_type": kind,
+                "reason": reason or kind,
+                "label": label,
+                "prediction": prediction,
+                "iou": overlap,
+                "matching_rule": MATCHING_RULE,
+                "iou_threshold": threshold,
+            })
+            by_type[kind] += 1
+
+        order = sorted(remaining_predictions,
+                       key=lambda index: (-predictions[index]["confidence"], index))
+        # Extra detections on a successful match must not consume another label.
+        for prediction_index in order:
+            box = predictions[prediction_index]["bbox_xyxy"]
+            overlaps = [_iou(box, labels[index]["bbox_xyxy"]) for index in matched_labels]
+            if any(value > 0 and value >= threshold for value in overlaps):
+                emit("false_positive", prediction_index, reason="duplicate_detection")
+                remaining_predictions.remove(prediction_index)
+
+        for kind in ("class_confusion", "localization"):
+            for prediction_index in order:
+                if prediction_index not in remaining_predictions:
+                    continue
+                prediction = predictions[prediction_index]
+                candidates = []
+                for label_index in sorted(remaining_labels):
+                    label = labels[label_index]
+                    overlap = _iou(prediction["bbox_xyxy"], label["bbox_xyxy"])
+                    same_class = prediction["category_id"] == label["category_id"]
+                    eligible = (
+                        not same_class and overlap >= threshold
+                        if kind == "class_confusion"
+                        else same_class and 0 < overlap < threshold
+                    )
+                    if eligible:
+                        candidates.append((overlap, label_index))
+                if candidates:
+                    overlap, label_index = max(candidates, key=lambda item: (item[0], -item[1]))
+                    emit(kind, prediction_index, label_index, overlap)
+                    remaining_predictions.remove(prediction_index)
+                    remaining_labels.remove(label_index)
+
+        for prediction_index in order:
+            if prediction_index in remaining_predictions:
+                emit("false_positive", prediction_index)
+        for label_index in sorted(remaining_labels):
+            emit("miss", label_index=label_index)
+
+    # Diagnostic pairs remain FP+FN in the original metric accounting.
+    paired = by_type["class_confusion"] + by_type["localization"]
+    summary = evaluation["summary"]
+    if (summary["false_positives"] != by_type["false_positive"] + paired
+            or summary["false_negatives"] != by_type["miss"] + paired
+            or summary["true_positives"] != matched_count):
+        raise EvaluationError("Diagnostic counts do not reconcile with evaluation counts.")
+    return {
+        "schema_version": 1,
+        "evaluation_id": evaluation["evaluation_id"],
+        "checkpoint": evaluation["checkpoint"],
+        "dataset": evaluation["dataset"],
+        "classes": evaluation["classes"],
+        "settings": {
+            **settings,
+            "diagnostic_rule": diagnostic_rule,
+            "localization_iou_rule": "0 < iou < iou_threshold",
+            "duplicate_rule": "positive_iou_at_threshold_with_already_matched_label",
+            "diagnostic_tie_break_rule": "confidence_desc_then_prediction_index; max_iou_then_label_index",
+        },
+        "summary": {
+            "error_count": len(errors),
+            "matched_detection_count": matched_count,
+            "by_error_type": by_type,
+        },
+        "errors": errors,
     }
 
 
@@ -389,9 +527,13 @@ def evaluate_validation(
     benchmark_output=None,
     warmup_runs: int | None = None,
     report_output=None,
+    errors_output=None,
+    error_summary_output=None,
 ) -> dict:
     """Run validation, then atomically write and return its complete report."""
     floor = confidence_value(confidence_floor)
+    if error_summary_output is not None and errors_output is None:
+        raise EvaluationError("error_summary_output requires errors_output")
     if report_output is not None and benchmark_output is None:
         raise EvaluationError("report_output requires benchmark_output")
     if warmup_runs is not None and benchmark_output is None:
@@ -436,20 +578,23 @@ def evaluate_validation(
         prepared.append((image, assignment, image_path, _labels_for(image, dataset, class_map)))
 
     checkpoint = Path(checkpoint_path).expanduser().resolve()
-    if benchmark_output is not None:
-        targets = [Path(p).expanduser().resolve() for p in (output_path, benchmark_output)]
-        if report_output is not None:
-            targets.append(Path(report_output).expanduser().resolve())
+    if benchmark_output is not None or errors_output is not None:
+        targets = [Path(output_path).expanduser().resolve()]
+        targets.extend(
+            Path(path).expanduser().resolve()
+            for path in (benchmark_output, report_output, errors_output, error_summary_output)
+            if path is not None
+        )
         protected = {Path(p).resolve() for p in
                      (manifest_path, split_manifest_path, frozen_test_lock_path,
                       checkpoint_path, class_map_path)}
         protected.update(dataset.resolve(image.image_path) for image in dataset.accepted)
         protected.update(dataset.resolve(image.annotation_path) for image in dataset.accepted)
         if len(set(targets)) != len(targets) or any(p in protected for p in targets):
-            raise EvaluationError("Benchmark outputs must be distinct from each other and inputs")
+            raise EvaluationError("Output files must be distinct from each other and inputs")
         for target in targets:
             if target.exists():
-                raise EvaluationError(f"Benchmark-enabled runs require new output files: {target}")
+                raise EvaluationError(f"Analysis runs require new output files: {target}")
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
             except OSError as error:
@@ -470,6 +615,7 @@ def evaluate_validation(
     records = []
     for image, assignment, image_path, labels in prepared:
         try:
+            image_digest = sha256_file(image_path) if errors_output is not None else None
             rgb_image = read_image(image_path)
             if (rgb_image.width, rgb_image.height) != (image.width, image.height):
                 raise EvaluationError(
@@ -483,6 +629,8 @@ def evaluate_validation(
                 confidence_floor=floor,
                 classes=class_map,
             )
+            if image_digest is not None and sha256_file(image_path) != image_digest:
+                raise EvaluationError(f"Validation image changed during inference: {image.image_id}")
         except (InferenceError, OSError, RuntimeError, TypeError, ValueError) as error:
             raise EvaluationError(f"Evaluation failed for image_id {image.image_id}: {error}") from error
 
@@ -491,6 +639,7 @@ def evaluate_validation(
         records.append({
             "image_id": image.image_id,
             "image_path": image.image_path.as_posix(),
+            **({"image_sha256": image_digest} if image_digest is not None else {}),
             "source_group_id": assignment.source_group_id,
             "width": image.width,
             "height": image.height,
@@ -554,9 +703,26 @@ def evaluate_validation(
         target = Path(output_path).expanduser().resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(target, report, operation="write evaluation report",
-                          overwrite=benchmark_output is None)
+                          overwrite=benchmark_output is None and errors_output is None)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         raise EvaluationError(f"Cannot write complete evaluation report: {error}") from error
+    if errors_output is not None:
+        try:
+            errors = extract_validation_errors(report)
+            errors["evaluation_sha256"] = sha256_file(target)
+            errors_target = Path(errors_output).expanduser().resolve()
+            write_json_atomic(errors_target, errors, operation="write validation errors", overwrite=False)
+            if error_summary_output is not None:
+                grouped = summarize_validation_errors(errors, manifest, dataset.root)
+                grouped["error_export_sha256"] = sha256_file(errors_target)
+                write_json_atomic(
+                    Path(error_summary_output).expanduser().resolve(), grouped,
+                    operation="write error summary", overwrite=False,
+                )
+        except (OSError, RuntimeError, KeyError, TypeError, ValueError) as error:
+            raise EvaluationError(
+                f"Diagnostic export failed; evaluation retained at {target}: {error}"
+            ) from error
     if benchmark_output is not None:
         from app.benchmark import benchmark_validation
 
@@ -605,6 +771,8 @@ def main(argv=None) -> int:
     parser.add_argument("--benchmark-output", type=Path)
     parser.add_argument("--warmup-runs", type=int)
     parser.add_argument("--report-output", type=Path)
+    parser.add_argument("--errors-output", type=Path)
+    parser.add_argument("--error-summary-output", type=Path)
     args = parser.parse_args(argv)
     try:
         report = evaluate_validation(
@@ -613,6 +781,8 @@ def main(argv=None) -> int:
             confidence_floor=args.confidence_floor, iou_threshold=args.iou_threshold,
             benchmark_output=args.benchmark_output, warmup_runs=args.warmup_runs,
             report_output=args.report_output,
+            errors_output=args.errors_output,
+            error_summary_output=args.error_summary_output,
         )
     except EvaluationError as error:
         parser.exit(2, f"Evaluation failed: {error}\n")

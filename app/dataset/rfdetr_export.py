@@ -41,6 +41,7 @@ from app.dataset.records import (
     GroundTruthObject,
     ParsedAnnotations,
     SourcePolicy,
+    analysis_metadata,
     coco_image_for,
     objects_for_image,
 )
@@ -410,6 +411,7 @@ def _coco_document(
                 "source_lot": image.source_lot,
                 "source_session": image.source_session,
                 "near_duplicate_group_id": image.near_duplicate_group_id,
+                **analysis_metadata(image),
             }
         )
         annotations.extend(image_annotations)
@@ -445,6 +447,7 @@ def _provenance_document(
                     "source_lot": image.source_lot,
                     "source_session": image.source_session,
                     "near_duplicate_group_id": image.near_duplicate_group_id,
+                    **analysis_metadata(image),
                     "annotation_count": len(annotations),
                 }
             )
@@ -532,6 +535,8 @@ def load_file_inputs(
                 source_lot=row.get("source_lot"),
                 source_session=row.get("source_session"),
                 near_duplicate_group_id=row.get("near_duplicate_group_id"),
+                lighting=row.get("lighting"),
+                almond_type=row.get("almond_type"),
             )
         )
     dataset = DatasetInput(
