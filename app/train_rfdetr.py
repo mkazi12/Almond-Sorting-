@@ -60,6 +60,16 @@ def load_config(config_path):
         raw = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as error:
         fail("config", str(error))
+    return resolve_config(raw, path.parent)
+
+
+def resolve_config(raw, base_dir):
+    """Validate a raw training configuration; relative paths resolve against ``base_dir``.
+
+    This is the single validation path for configuration files and saved
+    experiments (``app.experiment``).
+    """
+    base_dir = Path(base_dir).resolve()
     if not isinstance(raw, dict):
         fail("config", "expected a JSON object")
     required = {"variant", "dataset_dir", "initial_checkpoint", "device", "seed", "output_dir"}
@@ -78,7 +88,7 @@ def load_config(config_path):
         value = raw[field]
         if not isinstance(value, str) or not value.strip():
             fail(field, "expected a nonempty path")
-        resolved[field] = str((path.parent / value).resolve())
+        resolved[field] = str((base_dir / value).resolve())
     if not Path(resolved["initial_checkpoint"]).is_file():
         fail("initial_checkpoint", f"file is missing: {resolved['initial_checkpoint']}")
     output = Path(resolved["output_dir"])
@@ -158,7 +168,16 @@ def launch(config_path, *, artifact_writer=None, dry_run=False, checkpoint_loade
     ``app.run_artifacts``); ``checkpoint_loader`` overrides ``torch.load``
     when verifying saved checkpoints.
     """
-    resolved = load_config(config_path)
+    return launch_resolved(load_config(config_path), artifact_writer=artifact_writer,
+                           dry_run=dry_run, checkpoint_loader=checkpoint_loader)
+
+
+def launch_resolved(resolved, *, artifact_writer=None, dry_run=False, checkpoint_loader=None):
+    """Launch an already validated configuration from ``resolve_config``.
+
+    An optional ``resolved["lineage"]`` (set by ``app.experiment``) is kept in
+    ``resolved_config.json`` and ``run.json`` to link the new run to its parent.
+    """
     resolved["installed_dependencies"] = check_dependencies()
     torch = importlib.import_module("torch")
     check_device(resolved["device"], torch)

@@ -166,6 +166,7 @@ def start_run(resolved: dict) -> dict:
         },
         "dataset": dataset_fingerprint(resolved["dataset_dir"]),
         "test_set_policy": resolved.get("test_loader_policy"),
+        "lineage": resolved.get("lineage"),
         "files": {"resolved_config": RESOLVED_CONFIG, "metrics_log": METRICS_LOG,
                   "console_log": CONSOLE_LOG},
         "logs": None,

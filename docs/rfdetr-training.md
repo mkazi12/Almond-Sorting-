@@ -67,3 +67,38 @@ Upstream API references:
 [model and training implementation](https://github.com/roboflow/rf-detr/blob/1.3.0/rfdetr/detr.py),
 [configuration](https://github.com/roboflow/rf-detr/blob/1.3.0/rfdetr/config.py),
 [trainer](https://github.com/roboflow/rf-detr/blob/1.3.0/rfdetr/main.py).
+
+## Experiments derived from a previous run (SCRUM-68)
+
+An experiment re-trains a completed run with some parameters changed and
+launches it as a new run linked to its parent.
+
+```powershell
+.\.venv-training\Scripts\python.exe -m app.experiment save runs/almond-001 `
+  experiments/lower-lr.json --output-dir runs/almond-002 --set lr=0.00005 --set epochs=20
+.\.venv-training\Scripts\python.exe -m app.experiment launch experiments/lower-lr.json --dry-run
+.\.venv-training\Scripts\python.exe -m app.experiment launch experiments/lower-lr.json
+```
+
+- `--set KEY=VALUE` (repeatable) changes a `training` field, `device` or `seed`.
+  Values are JSON (`20`, `0.00005`, `true`), otherwise text. The variant is
+  fixed by the starting checkpoint.
+- `--checkpoint best|latest|initial` picks the parent's best or latest
+  checkpoint, or its own starting weights (default `best`). Training starts
+  from these weights with a fresh optimizer and epoch count; it does not resume.
+- The file stores the parent run ID and the hash of its `resolved_config.json`,
+  the dataset version and hashes, the checkpoint path and SHA-256, the
+  `changes` and the `resolved` parameters. Paths are relative to the file.
+- Save and launch both re-check: the parent is completed and unchanged, the
+  checkpoint and every dataset file still hash to the recorded values, the
+  dataset has no `test` split, and the output directory is new and outside the
+  parent. Failures name the field, e.g. `initial_checkpoint: file is missing`.
+  The result then goes through `resolve_config`, the normal training validation.
+- Launching gets a new run ID. The parent's files are only read. The new
+  `run.json` and `resolved_config.json` gain `lineage`: parent run ID and
+  directory, experiment path and SHA-256, checkpoint source and SHA-256,
+  changes and splits used. Normal runs record `lineage: null`.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_experiment.py tests/test_train_rfdetr.py -q
+```

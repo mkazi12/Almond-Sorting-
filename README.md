@@ -116,3 +116,5 @@ versioned manifests and approved splits into validated COCO train/valid inputs.
 
 See [Configured RF-DETR training](docs/rfdetr-training.md) for pinned training
 dependencies, JSON configuration, validation and the launch command.
+To change parameters of a completed run and relaunch it as a linked run, see
+[experiments derived from a previous run](docs/rfdetr-training.md#experiments-derived-from-a-previous-run-scrum-68).
