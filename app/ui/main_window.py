@@ -2,8 +2,10 @@
 
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
+from uuid import uuid4
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QThreadPool, Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -15,27 +17,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.image_loader import ImageLoadError, load_image
+from app.image_loader import (
+    MAX_IMAGE_FILE_SIZE_BYTES, MAX_IMAGE_PIXELS, ImageLoadError, load_image,
+    validate_image_extension, validate_image_file_size, validate_image_limits,
+)
 from app.inference import (
-    Detector, InferenceResult, RGBImage, confidence_value, validate_class_map, validate_result,
+    Detector, InferenceResult, confidence_value, validate_class_map,
 )
 from app.results import (
-    AnalysisRecord, ResultFileError, create_analysis, export_csv, load_analysis,
+    AnalysisRecord, ResultFileError, export_csv, load_analysis,
     save_analysis, source_image_sha256,
+)
+from app.ui.analysis_worker import (
+    AnalysisCompletion, AnalysisRequest, AnalysisWorker, rgb_pixels,
 )
 from app.ui.assets import SAMPLE_IMAGE_PATH
 from app.ui.overlays import render_detections
-
-
-def rgb_pixels(image: QImage) -> RGBImage:
-    """Convert decoded Qt pixels to contiguous RGB; do not decode the file again."""
-    converted = image.convertToFormat(QImage.Format.Format_RGB888)
-    row_size = converted.width() * 3
-    stride = converted.bytesPerLine()
-    data = bytes(converted.constBits())
-    if stride != row_size:
-        data = b"".join(data[offset:offset + row_size] for offset in range(0, len(data), stride))
-    return RGBImage(converted.width(), converted.height(), data)
 
 
 class MainWindow(QMainWindow):
@@ -46,18 +43,34 @@ class MainWindow(QMainWindow):
         class_names: Mapping[int, str] | None = None,
         confidence_floor: float = 0.25,
         model_label: str | None = None,
+        max_image_file_size_bytes: int = MAX_IMAGE_FILE_SIZE_BYTES,
+        max_image_pixels: int = MAX_IMAGE_PIXELS,
+        session_id: str | None = None,
     ):
         super().__init__()
+        validate_image_limits(max_image_file_size_bytes, max_image_pixels)
+        if model_label is not None and (not isinstance(model_label, str) or not model_label.strip()):
+            raise ValueError("Model version must be a nonblank string.")
+        if session_id is not None and (not isinstance(session_id, str) or not session_id.strip()):
+            raise ValueError("Session ID must be a nonblank string.")
         if detector is not None:
             validate_class_map(class_names)
         self.detector = detector
         self.class_names = dict(class_names or {})
         self.confidence_floor = confidence_value(confidence_floor)
         self.model_label = model_label
+        self.session_id = session_id or uuid4().hex
+        self.max_image_file_size_bytes = max_image_file_size_bytes
+        self.max_image_pixels = max_image_pixels
         self.current_path: Path | None = None
+        self.current_image_id: str | None = None
         self.current_image: QImage | None = None
         self.last_result: InferenceResult | None = None
         self.current_analysis: AnalysisRecord | None = None
+        self.active_request: AnalysisRequest | None = None
+        self.last_completion: AnalysisCompletion | None = None
+        self.completed_analyses: dict[str, AnalysisCompletion] = {}
+        self._active_worker: AnalysisWorker | None = None
         self.setWindowTitle("DINOS Almond Detection")
         self.resize(800, 600)
 
@@ -78,9 +91,14 @@ class MainWindow(QMainWindow):
         sample_button = QPushButton("Load sample image")
         sample_button.setObjectName("load_sample_button")
         sample_button.clicked.connect(self.load_sample_image)
+        self.run_analysis_button = QPushButton("Run Analysis")
+        self.run_analysis_button.setObjectName("run_analysis_button")
+        self.run_analysis_button.clicked.connect(self.run_analysis)
+        self.run_analysis_button.setEnabled(False)
         buttons = QHBoxLayout()
         buttons.addWidget(open_button)
         buttons.addWidget(sample_button)
+        buttons.addWidget(self.run_analysis_button)
         open_results_button = QPushButton("Open saved results")
         open_results_button.setObjectName("open_results_button")
         open_results_button.clicked.connect(self.open_results)
@@ -137,11 +155,13 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"Could not open saved results: {error}")
             return
         self.current_path = analysis.image_path
+        self.current_image_id = analysis.image_sha256
         self.current_image = image
         self.current_analysis = analysis
         self.last_result = analysis.result
         self._show_image(rendered)
         self._enable_result_actions(True)
+        self._update_analysis_controls()
         self.status_label.setText(
             f"Loaded saved results: {len(analysis.result.detections)} detection(s)."
             if analysis.result.detections else "Loaded saved results: no detections."
@@ -182,12 +202,113 @@ class MainWindow(QMainWindow):
             )
         )
 
+    @property
+    def active_model_version(self) -> str | None:
+        if self.detector is None:
+            return None
+        version = self.model_label or getattr(self.detector, "model_label", None)
+        return version if isinstance(version, str) and version.strip() else type(self.detector).__name__
+
+    def _update_analysis_controls(self) -> None:
+        self.run_analysis_button.setEnabled(
+            self.detector is not None
+            and self.current_image is not None
+            and self.current_image_id is not None
+            and self._active_worker is None
+        )
+
+    def run_analysis(self) -> None:
+        if self._active_worker is not None:
+            return
+        model_version = self.active_model_version
+        if (
+            self.detector is None or self.current_path is None
+            or self.current_image is None or self.current_image_id is None
+            or model_version is None
+        ):
+            return
+
+        request = AnalysisRequest(
+            request_id=uuid4().hex,
+            image_id=self.current_image_id,
+            image_path=self.current_path.resolve(),
+            model_version=model_version,
+            session_id=self.session_id,
+            image=self.current_image.copy(),
+            detector=self.detector,
+            class_names=MappingProxyType(dict(self.class_names)),
+            confidence_floor=self.confidence_floor,
+        )
+        worker = AnalysisWorker(request)
+        worker.signals.finished.connect(self._analysis_finished)
+        self.active_request = request
+        self._active_worker = worker
+        self.last_result = None
+        self.current_analysis = None
+        self._enable_result_actions(False)
+        self.run_analysis_button.setEnabled(False)
+        self.status_label.setText(
+            f"Analysis running for {request.image_path.name} "
+            f"(model {request.model_version}; session {request.session_id})."
+        )
+        try:
+            QThreadPool.globalInstance().start(worker)
+        except Exception as error:
+            reason = str(error).strip() or type(error).__name__
+            self._analysis_finished(
+                AnalysisCompletion(request, error=f"Could not start worker: {reason}")
+            )
+
+    def _analysis_finished(self, completion: AnalysisCompletion) -> None:
+        self.last_completion = completion
+        self.completed_analyses[completion.request.request_id] = completion
+        self.active_request = None
+        self._active_worker = None
+
+        request = completion.request
+        is_current = (
+            request.image_id == self.current_image_id
+            and request.image_path == self.current_path
+            and request.model_version == self.active_model_version
+        )
+        if completion.succeeded:
+            if is_current:
+                self.last_result = completion.result
+                self.current_analysis = completion.analysis
+                if completion.rendered_image is not None:
+                    self._show_image(completion.rendered_image)
+                self._enable_result_actions(True)
+                detections = len(completion.result.detections)
+                outcome = f"{detections} detection(s)" if detections else "no detections"
+                self.status_label.setText(
+                    f"Analysis succeeded for {request.image_path.name} "
+                    f"(model {request.model_version}): {outcome}."
+                )
+            else:
+                self.status_label.setText(
+                    f"Analysis succeeded for {request.image_path.name} "
+                    f"(model {request.model_version}); the current selection was not changed."
+                )
+        else:
+            self.status_label.setText(
+                f"Analysis failed for {request.image_path.name} "
+                f"(model {request.model_version}): {completion.error}"
+            )
+        self._update_analysis_controls()
+
     def display_image_path(self, path: str | Path) -> None:
         try:
-            # Bind predictions to the file that is about to be decoded, rather
-            # than whichever bytes exist after a possibly long model call.
-            source_digest = source_image_sha256(path) if self.detector is not None else None
-            image = load_image(path)
+            validate_image_extension(path)
+            validate_image_file_size(path, self.max_image_file_size_bytes)
+            resolved_path = Path(path).expanduser().resolve()
+            source_digest = source_image_sha256(resolved_path)
+            image = load_image(
+                resolved_path,
+                max_file_size_bytes=self.max_image_file_size_bytes,
+                max_pixels=self.max_image_pixels,
+            )
+            if source_image_sha256(resolved_path) != source_digest:
+                raise ResultFileError("The source image changed while it was being opened.")
         except ResultFileError as error:
             self.status_label.setText(
                 f"Could not open this image: {error}. Choose a readable JPG or PNG image."
@@ -196,35 +317,17 @@ class MainWindow(QMainWindow):
         except ImageLoadError as error:
             self.status_label.setText(str(error))
             return
-        self.current_path = Path(path)
+        self.current_path = resolved_path
+        self.current_image_id = source_digest
         self.current_image = image
         self.last_result = None
         self.current_analysis = None
         self._enable_result_actions(False)
         self._show_image(image)
-        if self.detector is None:
+        self._update_analysis_controls()
+        if self.active_model_version is None:
             self.status_label.setText("Image loaded. Model not configured; detection is unavailable.")
             return
-        try:
-            result = self.detector.predict(rgb_pixels(image), confidence_floor=self.confidence_floor)
-            validate_result(
-                result,
-                image_width=image.width(),
-                image_height=image.height(),
-                confidence_floor=self.confidence_floor,
-                classes=self.class_names,
-            )
-            analysis = create_analysis(
-                path, result, self.class_names, model_label=self.model_label,
-                expected_image_sha256=source_digest,
-            )
-            rendered = render_detections(image, result, self.class_names)
-            self._show_image(rendered)
-            self.last_result = result
-            self.current_analysis = analysis
-            self._enable_result_actions(True)
-            self.status_label.setText(
-                f"{len(result.detections)} detection(s)." if result.detections else "No detections."
-            )
-        except Exception as error:
-            self.status_label.setText(f"Inference failed: {error}")
+        self.status_label.setText(
+            f"Image loaded. Ready to analyze with {self.active_model_version}."
+        )

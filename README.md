@@ -21,15 +21,23 @@ for the selected versions and installation verification limits.
 
 ## Desktop workflow
 
-- Open a JPG/PNG or load the included sample image.
-- With a configured detector, inspect the rendered boxes, labels and confidence values.
+- Open a JPG/PNG or load the included sample image. The picker accepts JPEG/PNG
+  content only and rejects files larger than 20 MiB or images larger than 40
+  megapixels before analysis. Applications embedding `MainWindow` can override
+  these defaults with `max_image_file_size_bytes` and `max_image_pixels`.
+- Start **Run Analysis** to invoke the configured RF-DETR adapter in a worker.
+  The request snapshots the image SHA-256/path, model label and app-session ID;
+  changing the preview while it runs does not retarget its result.
+- To configure the desktop model, pass an inference JSON such as
+  `configs/inference.example.json` with `python -m app --inference-config PATH`.
+- Inspect successful rendered boxes, labels and confidence values.
 - Save successful analysis as JSON, or export its detections as CSV.
 - Open a saved JSON result to restore its image and overlays without running inference.
 
-The current baseline previews images immediately. It shows a model-unconfigured state
-until the Sprint 3 RF-DETR checkpoint adapter is connected. Real model training/loading
-remains ST-05 work. A preview alone cannot be saved as a successful analysis. A completed
-inference with zero detections can be saved and exported.
+The desktop can preview images without a model configured. Supplying an inference
+configuration loads the shared RF-DETR adapter at startup. A preview alone cannot be saved
+as a successful analysis. A completed inference with zero detections can be saved and
+exported.
 
 JSON contains the source-image reference and SHA-256, model label when available, class
 map, original image dimensions, prediction confidence floor and detections. Reopening
@@ -42,7 +50,7 @@ and sharing; reopen results through JSON. See [local_files.md](docs/local_files.
 | Location | Responsibility |
 | --- | --- |
 | `app/__main__.py` | Desktop startup |
-| `app/ui/` | Image/result dialogs, preview and overlays |
+| `app/ui/` | Image/result dialogs, preview, overlays and background analysis worker |
 | `app/inference.py` | Validated RGB inputs, detector protocol and prediction records |
 | `app/rfdetr_adapter.py` | RF-DETR checkpoint loading and prediction; see [rfdetr-inference.md](docs/rfdetr-inference.md) |
 | `app/results.py` | Validated local JSON save/reopen and CSV export |

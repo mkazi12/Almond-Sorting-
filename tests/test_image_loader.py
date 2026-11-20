@@ -88,6 +88,16 @@ class ImageLoaderTests(unittest.TestCase):
     def test_missing_file_is_rejected(self):
         self.assert_image_load_error(self.directory / "missing.png")
 
+    def test_file_size_limit_is_checked_before_decode(self):
+        path = self.save_image("large.png", "PNG")
+        with self.assertRaisesRegex(ImageLoadError, "file is too large"):
+            load_image(path, max_file_size_bytes=1)
+
+    def test_pixel_limit_is_checked_before_decode(self):
+        path = self.save_image("large.png", "PNG")
+        with self.assertRaisesRegex(ImageLoadError, "dimensions are too large"):
+            load_image(path, max_pixels=12 * 8 - 1)
+
 
 if __name__ == "__main__":
     unittest.main()
