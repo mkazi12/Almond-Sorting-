@@ -35,6 +35,17 @@ The command prints JSON with the model label, image size, confidence floor
 and detections. It exits 2 for a configuration or checkpoint problem and 3
 for an inference failure.
 
+For the desktop app, pass the same kind of configuration file at startup:
+
+```powershell
+python -m app --inference-config configs/inference.example.json
+```
+
+Choose an image, then use **Run Analysis**. Prediction and result validation
+run in a background worker. Each request captures the selected image path and
+SHA-256, adapter model label, confidence floor, class map and desktop session
+ID; changing the preview while it runs does not change the request.
+
 From Python:
 
 ```python
