@@ -36,6 +36,8 @@ class AnalysisRecord:
     class_names: Mapping[int, str]
     created_at: datetime
     model_label: str | None = None
+    class_counts: Mapping[int, int] | None = None
+    session_id: str | None = None
 
     def __post_init__(self):
         try:
@@ -50,6 +52,14 @@ class AnalysisRecord:
                 image_height=self.result.image_height,
                 confidence_floor=self.result.confidence_floor, classes=self.class_names,
             )
+            counts = detection_counts(self.result, self.class_names)
+            if self.class_counts is not None:
+                if not isinstance(self.class_counts, Mapping) or dict(self.class_counts) != counts:
+                    raise ValueError("Saved class counts do not match the detection records.")
+            if self.session_id is not None and (
+                not isinstance(self.session_id, str) or not self.session_id.strip()
+            ):
+                raise ValueError("Session ID must be a nonblank string or null for legacy results.")
             if not isinstance(self.created_at, datetime) or self.created_at.utcoffset() is None:
                 raise ValueError("Analysis time must include a timezone.")
             if self.model_label is not None and (
@@ -58,6 +68,7 @@ class AnalysisRecord:
                 raise ValueError("Model label must be a nonblank string or null when unknown.")
             object.__setattr__(self, "image_path", path)
             object.__setattr__(self, "class_names", MappingProxyType(dict(self.class_names)))
+            object.__setattr__(self, "class_counts", MappingProxyType(counts))
             object.__setattr__(self, "created_at", self.created_at.astimezone(timezone.utc))
         except (OSError, RuntimeError, TypeError, ValueError) as error:
             raise ResultFileError(str(error)) from error
@@ -102,6 +113,25 @@ def source_image_sha256(image_path) -> str:
         raise ResultFileError(f"Cannot read source image {image_path}: {error}. Choose a readable JPG/PNG image.") from error
 
 
+def detection_counts(result: InferenceResult, class_names: Mapping[int, str]) -> dict[int, int]:
+    """Return one stable count for every configured class, including zeroes."""
+    try:
+        validate_class_map(class_names)
+        validate_result(
+            result,
+            image_width=result.image_width,
+            image_height=result.image_height,
+            confidence_floor=result.confidence_floor,
+            classes=class_names,
+        )
+        counts = {category_id: 0 for category_id in sorted(class_names)}
+        for detection in result.detections:
+            counts[detection.category_id] += 1
+        return counts
+    except (AttributeError, RuntimeError, TypeError, ValueError) as error:
+        raise ResultFileError(str(error)) from error
+
+
 def _source_fingerprint(path: Path) -> tuple[str, tuple[int, int]]:
     try:
         _require_image_file(path)
@@ -120,7 +150,7 @@ def _source_fingerprint(path: Path) -> tuple[str, tuple[int, int]]:
         raise ResultFileError(f"Cannot verify source image {path}: {error}") from error
 
 
-def create_analysis(image_path, result, class_names, *, model_label=None, created_at=None,
+def create_analysis(image_path, result, class_names, *, session_id, model_label=None, created_at=None,
                     expected_image_sha256=None) -> AnalysisRecord:
     """Capture successful predictions, checking a pre-prediction source digest."""
     try:
@@ -136,7 +166,10 @@ def create_analysis(image_path, result, class_names, *, model_label=None, create
         if dimensions != (result.image_width, result.image_height):
             raise ResultFileError("Prediction dimensions do not match the source image.")
         timestamp = datetime.now(timezone.utc) if created_at is None else created_at
-        return AnalysisRecord(path, digest, result, class_names, timestamp, model_label)
+        return AnalysisRecord(
+            path, digest, result, class_names, timestamp, model_label,
+            detection_counts(result, class_names), session_id,
+        )
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         raise ResultFileError(str(error)) from error
 
@@ -193,8 +226,9 @@ def save_analysis(destination, analysis: AnalysisRecord, *, overwrite=False) -> 
         except ValueError:  # Different Windows drives have no relative path.
             image_path = str(analysis.image_path)
         result = analysis.result
+        schema_version = 2 if analysis.session_id is not None else 1
         payload = {
-            "schema_version": 1,
+            "schema_version": schema_version,
             "created_at": analysis.created_at.isoformat(),
             "model_label": analysis.model_label,
             "image": {"path": image_path, "sha256": analysis.image_sha256,
@@ -207,6 +241,12 @@ def save_analysis(destination, analysis: AnalysisRecord, *, overwrite=False) -> 
                                 "bbox_xyxy": list(item.bbox_xyxy)} for item in result.detections],
             },
         }
+        if schema_version == 2:
+            payload["session_id"] = analysis.session_id
+            payload["counts"] = [
+                {"category_id": key, "count": count}
+                for key, count in sorted(analysis.class_counts.items())
+            ]
         return _write(target, json.dumps(payload, indent=2, allow_nan=False) + "\n", analysis, overwrite)
     except (OSError, TypeError, ValueError) as error:
         raise ResultFileError(str(error)) from error
@@ -231,9 +271,15 @@ def load_analysis(path) -> AnalysisRecord:
     try:
         source = Path(path).expanduser().resolve()
         payload = json.loads(source.read_text(encoding="utf-8-sig"), object_pairs_hook=_object)
-        _keys(payload, ("schema_version", "created_at", "model_label", "image", "classes", "prediction"), "Analysis")
-        if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
-            raise ResultFileError("Unsupported analysis schema_version; expected 1.")
+        if type(payload.get("schema_version")) is not int or payload["schema_version"] not in (1, 2):
+            raise ResultFileError("Unsupported analysis schema_version; expected 1 or 2.")
+        schema_version = payload["schema_version"]
+        expected_fields = (
+            ("schema_version", "session_id", "created_at", "model_label", "image", "classes", "counts", "prediction")
+            if schema_version == 2 else
+            ("schema_version", "created_at", "model_label", "image", "classes", "prediction")
+        )
+        _keys(payload, expected_fields, "Analysis")
         image, prediction = payload["image"], payload["prediction"]
         _keys(image, ("path", "sha256", "width", "height"), "Image")
         _keys(prediction, ("confidence_floor", "detections"), "Prediction")
@@ -254,11 +300,30 @@ def load_analysis(path) -> AnalysisRecord:
             detections.append(Detection(item["category_id"], item["confidence"], item["bbox_xyxy"]))
         result = InferenceResult(image["width"], image["height"], prediction["confidence_floor"], detections)
         timestamp = datetime.fromisoformat(payload["created_at"])
+        session_id = payload.get("session_id") if schema_version == 2 else None
+        saved_counts = None
+        if schema_version == 2:
+            if not isinstance(session_id, str) or not session_id.strip():
+                raise ResultFileError("Saved session ID must be a nonblank string.")
+            if not isinstance(payload["counts"], list):
+                raise ResultFileError("Saved counts must be an array.")
+            saved_counts = {}
+            for item in payload["counts"]:
+                _keys(item, ("category_id", "count"), "Count")
+                category_id, count = item["category_id"], item["count"]
+                if type(category_id) is not int or category_id in saved_counts:
+                    raise ResultFileError("Saved count IDs must be unique integers.")
+                if type(count) is not int or count < 0:
+                    raise ResultFileError("Saved counts must be non-negative integers.")
+                saved_counts[category_id] = count
+            expected_counts = detection_counts(result, classes)
+            if saved_counts != expected_counts:
+                raise ResultFileError("Saved class counts do not match the detection records.")
         analysis = AnalysisRecord(source.parent / image["path"], image["sha256"], result,
-                                  classes, timestamp, payload["model_label"])
+                                  classes, timestamp, payload["model_label"], saved_counts, session_id)
         _verify_source(analysis)
         return analysis
-    except (OSError, RuntimeError, TypeError, ValueError) as error:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as error:
         raise ResultFileError(f"Cannot open analysis {path}: {error}") from error
 
 

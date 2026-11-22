@@ -10,7 +10,8 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtGui import QColor, QImage
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from app.image_loader import load_image
@@ -98,14 +99,14 @@ class MainWindowTests(unittest.TestCase):
         unsupported.write_bytes(self.path.read_bytes())
         window.display_image_path(unsupported)
         self.assertIn("Unsupported file extension", window.status_label.text())
-        self.assertEqual(window.current_path, self.path)
+        self.assertEqual(window.current_path, self.path.resolve())
         self.assertEqual(window.current_image, original_image)
         self.assertIs(window.current_analysis, original_analysis)
         self.assertTrue(window.save_results_button.isEnabled())
         self.assertEqual(detector.predict.call_count, 1)
 
         window.display_image_path(self.path)
-        self.assertEqual(window.current_path, self.path)
+        self.assertEqual(window.current_path, self.path.resolve())
         self.assertIsNotNone(window.current_image)
         detector.predict.assert_called_once()
         self.run_analysis_and_wait(window)
@@ -139,7 +140,7 @@ class MainWindowTests(unittest.TestCase):
         with patch("app.ui.main_window.load_image", wraps=load_image) as loader:
             window.display_image_path(self.path)
         loader.assert_called_once_with(
-            self.path,
+            self.path.resolve(),
             max_file_size_bytes=window.max_image_file_size_bytes,
             max_pixels=window.max_image_pixels,
         )
@@ -162,6 +163,8 @@ class MainWindowTests(unittest.TestCase):
         self.assertIn("Analysis succeeded", window.status_label.text())
         self.assertIn("no detections", window.status_label.text())
         self.assertIsNotNone(window.last_result)
+        self.assertEqual(dict(window.current_analysis.class_counts), {17: 0})
+        self.assertIn("Almond: 0", window.counts_label.text())
         self.assertTrue(window.save_results_button.isEnabled())
         self.assertTrue(window.export_csv_button.isEnabled())
         detector.predict.side_effect = InferenceError("Checkpoint unavailable")
@@ -173,6 +176,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertFalse(window.save_results_button.isEnabled())
         self.assertFalse(window.export_csv_button.isEnabled())
         self.assertFalse(window.image_label.pixmap().isNull())
+        self.assertEqual(window.counts_label.text(), "Detection counts unavailable.")
 
     def test_adapter_result_with_unknown_category_is_not_displayed(self):
         detector = Mock()
@@ -284,6 +288,55 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(rendered.size(), original.size())
         self.assertNotEqual(rendered.pixelColor(2, 8), original.pixelColor(2, 8))
 
+    def test_responsive_preview_scales_rendered_boxes_with_centered_margins(self):
+        source = QImage(400, 100, QImage.Format.Format_RGB32)
+        source.fill(QColor("white"))
+        result = InferenceResult(400, 100, .25, (Detection(17, .9, (100, 20, 300, 80)),))
+        rendered = render_detections(source, result, {17: "Almond"})
+        window = self.window()
+        window.image_label.resize(200, 200)
+        window.image_label.set_source_image(rendered)
+        self.application.processEvents()
+
+        expected = QPixmap.fromImage(rendered).scaled(
+            window.image_label.contentsRect().size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        actual = window.image_label.pixmap()
+        self.assertEqual(actual.size(), expected.size())
+        self.assertEqual(actual.toImage(), expected.toImage())
+        self.assertEqual(actual.width(), 200)
+        self.assertEqual(actual.height(), 50)
+        self.assertEqual((200 - actual.height()) // 2, 75)
+
+        # The source box (100, 20, 300, 80) maps to (50, 10, 150, 40)
+        # inside the centered 200 x 50 pixmap. The rendered pixmap comparison
+        # above verifies that the box and source pixels underwent one transform.
+        self.assertNotEqual(actual.toImage().pixelColor(50, 10), QColor("white"))
+        self.assertNotEqual(actual.toImage().pixelColor(150, 40), QColor("white"))
+
+    def test_responsive_preview_repeated_resizing_does_not_mutate_or_accumulate_overlays(self):
+        source = QImage(120, 80, QImage.Format.Format_RGB32)
+        source.fill(QColor("white"))
+        result = InferenceResult(120, 80, .25, (Detection(17, .9, (20, 15, 90, 65)),))
+        rendered = render_detections(source, result, {17: "Almond"})
+        original_box = result.detections[0].bbox_xyxy
+        window = self.window()
+        for width, height in ((240, 240), (320, 160), (160, 320), (300, 200), (240, 240)):
+            with self.subTest(width=width, height=height):
+                window.image_label.resize(width, height)
+                window.image_label.set_source_image(rendered)
+                self.application.processEvents()
+                self.assertEqual(window.image_label.source_image, rendered)
+                self.assertEqual(result.detections[0].bbox_xyxy, original_box)
+                expected = QPixmap.fromImage(rendered).scaled(
+                    window.image_label.contentsRect().size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self.assertEqual(window.image_label.pixmap().toImage(), expected.toImage())
+
     def test_empty_overlay_preserves_pixels(self):
         rendered = render_detections(self.image, InferenceResult(21, 12, .25), {})
         self.assertEqual(rendered, self.image)
@@ -334,9 +387,35 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(csv_path.is_file())
         detector.predict.assert_called_once()
 
+    def test_successful_analysis_is_not_reported_saved_until_manual_save(self):
+        detector = Mock()
+        detector.predict.return_value = InferenceResult(21, 12, .25)
+        window = self.window(detector=detector, class_names={17: "Almond"})
+        window.display_image_path(self.path)
+        self.run_analysis_and_wait(window)
+        self.assertIn("Analysis succeeded", window.status_label.text())
+        self.assertNotIn("Saved results", window.status_label.text())
+
+    def test_counts_include_zero_classes_and_clear_for_new_request(self):
+        detector = Mock()
+        detector.predict.return_value = InferenceResult(
+            21, 12, .25, (Detection(17, .9, (2, 3, 15, 10)),)
+        )
+        window = self.window(
+            detector=detector,
+            class_names={17: "Almond", 21: "Foreign material"},
+        )
+        window.display_image_path(self.path)
+        self.run_analysis_and_wait(window)
+        self.assertIn("Almond: 1", window.counts_label.text())
+        self.assertIn("Foreign material: 0", window.counts_label.text())
+        window.display_image_path(self.path)
+        self.assertEqual(window.counts_label.text(), "Detection counts unavailable.")
+        self.assertIsNone(window.current_analysis)
+
     def test_open_saved_results_uses_saved_classes_and_does_not_predict(self):
         result = InferenceResult(21, 12, .4, (Detection(99, .8, (1, 2, 18, 11)),))
-        saved = create_analysis(self.path, result, {99: "Foreign material"})
+        saved = create_analysis(self.path, result, {99: "Foreign material"}, session_id="saved-session", model_label="saved-model")
         json_path = self.path.with_name("saved.json")
         save_analysis(json_path, saved)
         detector = Mock()
@@ -352,6 +431,9 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(window.confidence_floor, .25)
         self.assertIn("Loaded saved results", window.status_label.text())
         self.assertTrue(window.save_results_button.isEnabled())
+        self.assertEqual(window.current_analysis.session_id, "saved-session")
+        self.assertEqual(window.current_analysis.model_label, "saved-model")
+        self.assertIn("Foreign material: 1", window.counts_label.text())
 
     def test_failed_or_cancelled_result_open_preserves_previous_preview(self):
         window = self.window()
@@ -373,7 +455,7 @@ class MainWindowTests(unittest.TestCase):
     def test_changed_source_cannot_reopen_saved_detections(self):
         result = InferenceResult(21, 12, .25)
         saved_path = self.path.with_name("saved.json")
-        save_analysis(saved_path, create_analysis(self.path, result, {17: "Almond"}))
+        save_analysis(saved_path, create_analysis(self.path, result, {17: "Almond"}, session_id="changed-source-session"))
         self.image.fill(QColor("red"))
         self.image.save(str(self.path), "PNG")
         window = self.window()

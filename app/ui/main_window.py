@@ -6,7 +6,7 @@ from types import MappingProxyType
 from uuid import uuid4
 
 from PySide6.QtCore import QThreadPool, Qt
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -33,6 +33,7 @@ from app.ui.analysis_worker import (
 )
 from app.ui.assets import SAMPLE_IMAGE_PATH
 from app.ui.overlays import render_detections
+from app.ui.preview_label import ResponsiveImageLabel
 
 
 class MainWindow(QMainWindow):
@@ -67,6 +68,7 @@ class MainWindow(QMainWindow):
         self.current_image: QImage | None = None
         self.last_result: InferenceResult | None = None
         self.current_analysis: AnalysisRecord | None = None
+        self.detection_counts: dict[int, int] | None = None
         self.active_request: AnalysisRequest | None = None
         self.last_completion: AnalysisCompletion | None = None
         self.completed_analyses: dict[str, AnalysisCompletion] = {}
@@ -74,7 +76,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("DINOS Almond Detection")
         self.resize(800, 600)
 
-        self.image_label = QLabel("Choose an image to begin")
+        self.image_label = ResponsiveImageLabel("Choose an image to begin")
         self.image_label.setObjectName("image_label")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setWordWrap(True)
@@ -84,6 +86,9 @@ class MainWindow(QMainWindow):
         )
         self.status_label.setObjectName("inference_status")
         self.status_label.setWordWrap(True)
+        self.counts_label = QLabel("Detection counts unavailable.")
+        self.counts_label.setObjectName("detection_counts")
+        self.counts_label.setWordWrap(True)
 
         open_button = QPushButton("Open image")
         open_button.setObjectName("open_image_button")
@@ -117,6 +122,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(buttons)
         layout.addWidget(self.image_label, 1)
         layout.addLayout(result_buttons)
+        layout.addWidget(self.counts_label)
         layout.addWidget(self.status_label)
         container = QWidget()
         container.setLayout(layout)
@@ -135,6 +141,18 @@ class MainWindow(QMainWindow):
     def _enable_result_actions(self, enabled: bool) -> None:
         self.save_results_button.setEnabled(enabled)
         self.export_csv_button.setEnabled(enabled)
+
+    def _show_analysis_counts(self, analysis: AnalysisRecord | None) -> None:
+        if analysis is None:
+            self.detection_counts = None
+            self.counts_label.setText("Detection counts unavailable.")
+            return
+        self.detection_counts = dict(analysis.class_counts)
+        summary = " | ".join(
+            f"{analysis.class_names[category_id]}: {count}"
+            for category_id, count in sorted(self.detection_counts.items())
+        )
+        self.counts_label.setText(f"Detection counts — {summary}")
 
     def open_results(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -159,6 +177,7 @@ class MainWindow(QMainWindow):
         self.current_image = image
         self.current_analysis = analysis
         self.last_result = analysis.result
+        self._show_analysis_counts(analysis)
         self._show_image(rendered)
         self._enable_result_actions(True)
         self._update_analysis_controls()
@@ -196,11 +215,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Saved results: {destination}")
 
     def _show_image(self, image: QImage) -> None:
-        self.image_label.setPixmap(
-            QPixmap.fromImage(image).scaled(
-                600, 400, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-            )
-        )
+        self.image_label.set_source_image(image)
 
     @property
     def active_model_version(self) -> str | None:
@@ -245,6 +260,7 @@ class MainWindow(QMainWindow):
         self._active_worker = worker
         self.last_result = None
         self.current_analysis = None
+        self._show_analysis_counts(None)
         self._enable_result_actions(False)
         self.run_analysis_button.setEnabled(False)
         self.status_label.setText(
@@ -275,6 +291,7 @@ class MainWindow(QMainWindow):
             if is_current:
                 self.last_result = completion.result
                 self.current_analysis = completion.analysis
+                self._show_analysis_counts(completion.analysis)
                 if completion.rendered_image is not None:
                     self._show_image(completion.rendered_image)
                 self._enable_result_actions(True)
@@ -290,6 +307,11 @@ class MainWindow(QMainWindow):
                     f"(model {request.model_version}); the current selection was not changed."
                 )
         else:
+            if is_current:
+                self.last_result = None
+                self.current_analysis = None
+                self._show_analysis_counts(None)
+                self._enable_result_actions(False)
             self.status_label.setText(
                 f"Analysis failed for {request.image_path.name} "
                 f"(model {request.model_version}): {completion.error}"
@@ -322,6 +344,7 @@ class MainWindow(QMainWindow):
         self.current_image = image
         self.last_result = None
         self.current_analysis = None
+        self._show_analysis_counts(None)
         self._enable_result_actions(False)
         self._show_image(image)
         self._update_analysis_controls()

@@ -8,6 +8,11 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from app.inference import InferenceError, InferenceResult, validate_result
 
 
+def class_color(category_id: int) -> QColor:
+    """Return the stable display color assigned to a detection category."""
+    return QColor.fromHsv((category_id * 67 + 90) % 360, 210, 220)
+
+
 def render_detections(image: QImage, result: InferenceResult, classes: Mapping[int, str]) -> QImage:
     """Return a full-resolution annotated copy; empty results leave pixels alone."""
     if image.isNull():
@@ -33,7 +38,7 @@ def render_detections(image: QImage, result: InferenceResult, classes: Mapping[i
         painter.setFont(font)
         for detection in result.detections:
             left, top, right, bottom = detection.bbox_xyxy
-            color = QColor.fromHsv((detection.category_id * 67 + 90) % 360, 210, 220)
+            color = class_color(detection.category_id)
             painter.setPen(QPen(color, 2))
             painter.drawRect(QRectF(left, top, right - left, bottom - top))
             text = f"{classes[detection.category_id]} {detection.confidence:.0%}"
