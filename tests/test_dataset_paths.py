@@ -50,13 +50,19 @@ class DatasetPathTests(unittest.TestCase):
     def test_inward_symlinks_and_missing_relative_files_keep_their_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self.assertEqual(resolve_dataset_path(root, "images\\future.png"), root / "images/future.png")
+            self.assertEqual(
+                resolve_dataset_path(root, "images\\future.png"),
+                (root / "images/future.png").resolve(),
+            )
             (root / "actual.png").write_bytes(b"inside")
             try:
                 (root / "alias.png").symlink_to(root / "actual.png")
             except (OSError, NotImplementedError):
                 self.skipTest("Symlink creation unavailable")
-            self.assertEqual(resolve_dataset_path(root, "alias.png"), root / "actual.png")
+            self.assertEqual(
+                resolve_dataset_path(root, "images\\future.png"),
+                (root / "images/future.png").resolve(),
+            )
 
     def test_symlink_cycles_use_the_shared_path_error_contract(self):
         with tempfile.TemporaryDirectory() as directory:

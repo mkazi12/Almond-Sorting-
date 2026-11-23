@@ -80,6 +80,7 @@ class AnalysisWorker(QRunnable):
                 request.image_path,
                 result,
                 request.class_names,
+                session_id=request.session_id,
                 model_label=request.model_version,
                 expected_image_sha256=request.image_id,
             )

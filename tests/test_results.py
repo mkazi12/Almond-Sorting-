@@ -29,8 +29,10 @@ class LocalResultTests(unittest.TestCase):
         Image.new("RGB", (20, 10), "gray").save(self.image)
         self.result = InferenceResult(20, 10, .25, (Detection(17, .9, (1.5, 2, 18, 9)),))
         self.classes = {17: "Almond, whole", 21: "Foreign material"}
-        self.record = create_analysis(self.image, self.result, self.classes,
-                                      model_label="candidate-1", created_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
+        self.record = create_analysis(
+            self.image, self.result, self.classes, session_id="session-test",
+            model_label="candidate-1", created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
         self.path = self.root / "results" / "analysis.json"
 
     def save(self):
@@ -44,13 +46,21 @@ class LocalResultTests(unittest.TestCase):
 
     def test_json_roundtrip_preserves_metadata_predictions_and_relative_source(self):
         data = self.save()
-        self.assertEqual(data["schema_version"], 1)
+        self.assertEqual(data["schema_version"], 2)
+        self.assertEqual(data["session_id"], "session-test")
+        self.assertEqual(data["counts"], [
+            {"category_id": 17, "count": 1},
+            {"category_id": 21, "count": 0},
+        ])
         self.assertEqual(data["image"]["path"], "../images/frame.png")
         self.assertEqual(data["prediction"]["detections"][0]["bbox_xyxy"], [1.5, 2., 18., 9.])
         loaded = load_analysis(self.path)
         self.assertEqual(loaded, self.record)
         self.assertEqual(loaded.result.confidence_floor, .25)
         self.assertEqual(loaded.model_label, "candidate-1")
+        self.assertEqual(loaded.session_id, "session-test")
+        self.assertEqual(dict(loaded.class_counts), {17: 1, 21: 0})
+        self.assertEqual(loaded.result.detections, self.result.detections)
 
     def test_relative_result_and_source_can_move_together(self):
         self.save()
@@ -59,7 +69,7 @@ class LocalResultTests(unittest.TestCase):
         shutil.move(self.image.parent, moved / "images")
         shutil.move(self.path.parent, moved / "results")
         loaded = load_analysis(moved / "results/analysis.json")
-        self.assertEqual(loaded.image_path, moved / "images/frame.png")
+        self.assertEqual(loaded.image_path, (moved / "images/frame.png").resolve())
         self.assertEqual(loaded.result, self.record.result)
 
     def test_saved_results_open_through_directory_and_file_symlinks(self):
@@ -93,7 +103,7 @@ class LocalResultTests(unittest.TestCase):
     def test_csv_formula_leading_text_is_literal_while_json_keeps_original_text(self):
         for prefix in ("=", "+", "-", "@", " \t=", "\r\n+"):
             name = prefix + "1+1"
-            record = create_analysis(self.image, self.result, {17: name}, model_label=name)
+            record = create_analysis(self.image, self.result, {17: name}, session_id="formula-session", model_label=name)
             csv_path = export_csv(self.root / "formula.csv", record, overwrite=True)
             with csv_path.open(newline="") as handle:
                 row, = list(csv.DictReader(handle))
@@ -105,10 +115,13 @@ class LocalResultTests(unittest.TestCase):
             self.assertEqual(loaded.model_label, name)
 
     def test_successful_empty_analysis_roundtrips_and_csv_has_headers_only(self):
-        record = create_analysis(self.image, InferenceResult(20, 10, .25), self.classes)
+        record = create_analysis(self.image, InferenceResult(20, 10, .25), self.classes, session_id="empty-session")
         save_analysis(self.path, record)
-        self.assertEqual(load_analysis(self.path).result.detections, ())
-        self.assertIsNone(load_analysis(self.path).model_label)
+        loaded = load_analysis(self.path)
+        self.assertEqual(loaded.result.detections, ())
+        self.assertEqual(dict(loaded.class_counts), {17: 0, 21: 0})
+        self.assertEqual(loaded.session_id, "empty-session")
+        self.assertIsNone(loaded.model_label)
         path = export_csv(self.root / "empty.csv", record)
         with path.open(newline="") as handle:
             reader = csv.DictReader(handle)
@@ -165,9 +178,9 @@ class LocalResultTests(unittest.TestCase):
         self.assertEqual(before, self.record.image_sha256)
         Image.new("RGB", (20, 10), "blue").save(self.image)
         with self.assertRaisesRegex(ResultFileError, "changed during analysis"):
-            create_analysis(self.image, self.result, self.classes, expected_image_sha256=before)
+            create_analysis(self.image, self.result, self.classes, session_id="changed-session", expected_image_sha256=before)
         with self.assertRaisesRegex(ResultFileError, "Expected image SHA-256"):
-            create_analysis(self.image, self.result, self.classes, expected_image_sha256="invalid")
+            create_analysis(self.image, self.result, self.classes, session_id="invalid-session", expected_image_sha256="invalid")
 
     def test_missing_source_is_an_explicit_load_failure(self):
         self.save()
@@ -186,7 +199,7 @@ class LocalResultTests(unittest.TestCase):
                 with self.subTest(path=path), self.assertRaises(ResultFileError):
                     source_image_sha256(path)
                 with self.subTest(path=path), self.assertRaises(ResultFileError):
-                    create_analysis(path, self.result, self.classes)
+                    create_analysis(path, self.result, self.classes, session_id="invalid-source")
             hasher.assert_not_called()
 
     def test_saved_json_nonregular_source_is_rejected_before_hashing(self):
@@ -212,9 +225,9 @@ class LocalResultTests(unittest.TestCase):
 
     def test_create_analysis_rejects_wrong_dimensions_or_naive_timestamp(self):
         with self.assertRaisesRegex(ResultFileError, "dimensions"):
-            create_analysis(self.image, InferenceResult(10, 20, .25), self.classes)
+            create_analysis(self.image, InferenceResult(10, 20, .25), self.classes, session_id="dimension-session")
         with self.assertRaisesRegex(ResultFileError, "timezone"):
-            create_analysis(self.image, self.result, self.classes, created_at=datetime(2026, 1, 1))
+            create_analysis(self.image, self.result, self.classes, session_id="naive-session", created_at=datetime(2026, 1, 1))
 
     def test_malformed_json_and_duplicate_fields_are_rejected(self):
         self.path.parent.mkdir()
@@ -227,7 +240,7 @@ class LocalResultTests(unittest.TestCase):
         base = self.save()
         cases = [
             lambda p: p.update(schema_version=True),
-            lambda p: p.update(schema_version=2),
+            lambda p: p.update(schema_version=3),
             lambda p: p.update(created_at="2026-01-02"),
             lambda p: p.update(model_label=" "),
             lambda p: p["image"].update(sha256="invalid"),
@@ -245,6 +258,44 @@ class LocalResultTests(unittest.TestCase):
             self.path.write_text(json.dumps(payload))
             with self.subTest(payload=payload), self.assertRaises(ResultFileError):
                 load_analysis(self.path)
+
+    def test_inconsistent_saved_counts_are_rejected(self):
+        payload = self.save()
+        payload["counts"][0]["count"] = 2
+        self.path.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(ResultFileError, "counts do not match"):
+            load_analysis(self.path)
+
+    def test_schema_two_requires_a_session_id(self):
+        payload = self.save()
+        payload["session_id"] = " "
+        self.path.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(ResultFileError, "session ID"):
+            load_analysis(self.path)
+
+    def test_schema_one_loads_with_derived_counts_and_no_session_id(self):
+        payload = self.save()
+        payload.pop("session_id")
+        payload.pop("counts")
+        payload["schema_version"] = 1
+        self.path.write_text(json.dumps(payload))
+        loaded = load_analysis(self.path)
+        self.assertIsNone(loaded.session_id)
+        self.assertEqual(dict(loaded.class_counts), {17: 1, 21: 0})
+
+    def test_legacy_record_resaves_as_schema_one_without_inventing_session_id(self):
+        payload = self.save()
+        payload.pop("session_id")
+        payload.pop("counts")
+        payload["schema_version"] = 1
+        self.path.write_text(json.dumps(payload))
+        legacy = load_analysis(self.path)
+        output = self.root / "legacy-copy.json"
+        save_analysis(output, legacy)
+        saved = json.loads(output.read_text())
+        self.assertEqual(saved["schema_version"], 1)
+        self.assertNotIn("session_id", saved)
+        self.assertNotIn("counts", saved)
 
 
 if __name__ == "__main__":
