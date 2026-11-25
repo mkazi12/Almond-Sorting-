@@ -25,6 +25,8 @@ from app.results import (
 )
 from app.ui.assets import SAMPLE_IMAGE_PATH
 from app.ui.overlays import render_detections
+from app.model_registry import DEFAULT_REGISTRY_ROOT
+from app.ui.model_registry import ModelRegistryDialog
 
 
 def rgb_pixels(image: QImage) -> RGBImage:
@@ -46,6 +48,7 @@ class MainWindow(QMainWindow):
         class_names: Mapping[int, str] | None = None,
         confidence_floor: float = 0.25,
         model_label: str | None = None,
+        registry_root: str | Path = DEFAULT_REGISTRY_ROOT,
     ):
         super().__init__()
         if detector is not None:
@@ -54,6 +57,8 @@ class MainWindow(QMainWindow):
         self.class_names = dict(class_names or {})
         self.confidence_floor = confidence_value(confidence_floor)
         self.model_label = model_label
+        self.registry_root = Path(registry_root).resolve()
+        self.registry_dialog = None
         self.current_path: Path | None = None
         self.current_image: QImage | None = None
         self.last_result: InferenceResult | None = None
@@ -81,6 +86,10 @@ class MainWindow(QMainWindow):
         buttons = QHBoxLayout()
         buttons.addWidget(open_button)
         buttons.addWidget(sample_button)
+        models_button = QPushButton("Saved models")
+        models_button.setObjectName("saved_models_button")
+        models_button.clicked.connect(self.open_model_registry)
+        buttons.addWidget(models_button)
         open_results_button = QPushButton("Open saved results")
         open_results_button.setObjectName("open_results_button")
         open_results_button.clicked.connect(self.open_results)
@@ -103,6 +112,14 @@ class MainWindow(QMainWindow):
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
+
+    def open_model_registry(self) -> None:
+        if self.registry_dialog is None:
+            self.registry_dialog = ModelRegistryDialog(self.registry_root, self)
+        else:
+            self.registry_dialog.refresh()
+        self.registry_dialog.show()
+        self.registry_dialog.raise_()
 
     def open_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

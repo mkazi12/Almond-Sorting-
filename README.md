@@ -25,6 +25,8 @@ for the selected versions and installation verification limits.
 - With a configured detector, inspect the rendered boxes, labels and confidence values.
 - Save successful analysis as JSON, or export its detections as CSV.
 - Open a saved JSON result to restore its image and overlays without running inference.
+- Browse **Saved models** to inspect saved versions, classes, dataset provenance,
+  checkpoint availability and validation summaries. See [registry format](docs/model_registry.md).
 
 The current baseline previews images immediately. It shows a model-unconfigured state
 until the Sprint 3 RF-DETR checkpoint adapter is connected. Real model training/loading
