@@ -1,0 +1,5 @@
+# Full desktop model workflow, in a Python 3.12 environment.
+# Use this instead of requirements.txt to retain RF-DETR's NumPy 1.x pin.
+-r requirements-training.txt
+PySide6_Essentials==6.12.0
+pillow==13.0.0

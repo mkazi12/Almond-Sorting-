@@ -26,6 +26,7 @@ from app.results import (
 from app.ui.assets import SAMPLE_IMAGE_PATH
 from app.ui.overlays import render_detections
 from app.model_registry import DEFAULT_REGISTRY_ROOT
+from app.model_workflow import ModelWorkflow, ModelError
 from app.ui.model_registry import ModelRegistryDialog
 
 
@@ -49,6 +50,7 @@ class MainWindow(QMainWindow):
         confidence_floor: float = 0.25,
         model_label: str | None = None,
         registry_root: str | Path = DEFAULT_REGISTRY_ROOT,
+        model_workflow: ModelWorkflow | None = None,
     ):
         super().__init__()
         if detector is not None:
@@ -58,6 +60,8 @@ class MainWindow(QMainWindow):
         self.confidence_floor = confidence_value(confidence_floor)
         self.model_label = model_label
         self.registry_root = Path(registry_root).resolve()
+        self.model_workflow = model_workflow or ModelWorkflow(self.registry_root)
+        self.registry_root = self.model_workflow.root
         self.registry_dialog = None
         self.current_path: Path | None = None
         self.current_image: QImage | None = None
@@ -106,16 +110,39 @@ class MainWindow(QMainWindow):
         self._enable_result_actions(False)
         layout = QVBoxLayout()
         layout.addLayout(buttons)
+        self.active_model_label = QLabel(f"Active model: {model_label or 'Not configured'}")
+        self.active_model_label.setWordWrap(True)
+        layout.addWidget(self.active_model_label)
         layout.addWidget(self.image_label, 1)
         layout.addLayout(result_buttons)
         layout.addWidget(self.status_label)
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
+        if detector is None:
+            try:
+                active = self.model_workflow.restore()
+                if active is not None:
+                    self._use_active_model(active)
+            except ModelError as error:
+                self.status_label.setText(str(error))
+
+    def _use_active_model(self, active):
+        self.detector = active.detector
+        self.class_names = dict(active.class_map)
+        self.model_label = active.label
+        self.active_model_label.setText(f"Active model: {active.model_id} / {active.model_version}")
+        self.status_label.setText(f"Active model loaded: {active.model_id}. Choose an image to analyze.")
+
+    def activate_model(self, model_id):
+        active = self.model_workflow.activate(model_id)
+        self._use_active_model(active)
 
     def open_model_registry(self) -> None:
         if self.registry_dialog is None:
-            self.registry_dialog = ModelRegistryDialog(self.registry_root, self)
+            self.registry_dialog = ModelRegistryDialog(
+                self.registry_root, self, workflow=self.model_workflow, activate=self.activate_model,
+            )
         else:
             self.registry_dialog.refresh()
         self.registry_dialog.show()
@@ -200,10 +227,16 @@ class MainWindow(QMainWindow):
         )
 
     def display_image_path(self, path: str | Path) -> None:
+        # Hold strong references and a copy of metadata for this entire analysis.
+        # A replacement cannot change a running prediction's classes or identity.
+        detector = self.detector
+        class_names = dict(self.class_names)
+        model_label = self.model_label
+        confidence_floor = self.confidence_floor
         try:
             # Bind predictions to the file that is about to be decoded, rather
             # than whichever bytes exist after a possibly long model call.
-            source_digest = source_image_sha256(path) if self.detector is not None else None
+            source_digest = source_image_sha256(path) if detector is not None else None
             image = load_image(path)
         except ResultFileError as error:
             self.status_label.setText(
@@ -219,23 +252,23 @@ class MainWindow(QMainWindow):
         self.current_analysis = None
         self._enable_result_actions(False)
         self._show_image(image)
-        if self.detector is None:
+        if detector is None:
             self.status_label.setText("Image loaded. Model not configured; detection is unavailable.")
             return
         try:
-            result = self.detector.predict(rgb_pixels(image), confidence_floor=self.confidence_floor)
+            result = detector.predict(rgb_pixels(image), confidence_floor=confidence_floor)
             validate_result(
                 result,
                 image_width=image.width(),
                 image_height=image.height(),
-                confidence_floor=self.confidence_floor,
-                classes=self.class_names,
+                confidence_floor=confidence_floor,
+                classes=class_names,
             )
             analysis = create_analysis(
-                path, result, self.class_names, model_label=self.model_label,
+                path, result, class_names, model_label=model_label,
                 expected_image_sha256=source_digest,
             )
-            rendered = render_detections(image, result, self.class_names)
+            rendered = render_detections(image, result, class_names)
             self._show_image(rendered)
             self.last_result = result
             self.current_analysis = analysis

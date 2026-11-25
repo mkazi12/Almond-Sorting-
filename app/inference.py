@@ -118,7 +118,7 @@ class InferenceResult:
 
 
 class Detector(Protocol):
-    """Implemented by the checkpoint adapter in ST-05.4.
+    """Implemented by the RF-DETR checkpoint adapter in app.rfdetr_detector.
 
     Preprocessing and mapping predictions back to the input dimensions are
     the adapter's responsibility. Raise InferenceError when prediction fails.
