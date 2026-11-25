@@ -16,6 +16,7 @@ coverage.xml
 /runs/
 /artifacts/
 /outputs/
+/models/
 /.local-test/
 *.pt
 *.pth
@@ -30,3 +31,4 @@ coverage.xml
 /build/
 /dist/
 *.egg-info/
+/.tmp-pdf-tools/
