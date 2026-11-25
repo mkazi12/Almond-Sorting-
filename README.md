@@ -27,10 +27,12 @@ for the selected versions and installation verification limits.
 - Open a saved JSON result to restore its image and overlays without running inference.
 - Browse **Saved models** to inspect saved versions, classes, dataset provenance,
   checkpoint availability and validation summaries. See [registry format](docs/model_registry.md).
+- Import compatible ZIP packages, explicitly activate a saved model, and export
+  reusable packages from that view. Install `requirements-models.txt` for this workflow.
 
-The current baseline previews images immediately. It shows a model-unconfigured state
-until the Sprint 3 RF-DETR checkpoint adapter is connected. Real model training/loading
-remains ST-05 work. A preview alone cannot be saved as a successful analysis. A completed
+The desktop previews images immediately and restores a successfully selected model
+on restart. Without a valid saved selection it remains in preview mode. The model
+workflow uses the pinned RF-DETR CPU adapter. A preview alone cannot be saved as a successful analysis. A completed
 inference with zero detections can be saved and exported.
 
 JSON contains the source-image reference and SHA-256, model label when available, class
